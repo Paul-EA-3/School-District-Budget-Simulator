@@ -1,5 +1,6 @@
 
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
+import { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings } from "./gemini";
+import genAI from "./gemini";
 
 export interface FinancialState {
   revenue: number;
@@ -31,10 +32,13 @@ export interface StateApiDiscovery {
  */
 export const find_state_api = async (state_abbreviation: string): Promise<StateApiDiscovery | null> => {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
-    const prompt = `
-      For the state with the abbreviation ${state_abbreviation}, find the most direct public URL for:
+    const response = await genAI.models.generateContent({
+        model: PRO_MODEL,
+        config: {
+            tools: [{ googleSearch: {} }] as any,
+            safetySettings
+        },
+        contents: `For the state with the abbreviation ${state_abbreviation}, find the most direct public URL for:
       1. District-Level Per-Pupil Expenditure (PPE) Data.
       2. District-Level Academic Assessment Proficiency Rates (e.g., state test scores).
       
@@ -45,27 +49,12 @@ export const find_state_api = async (state_abbreviation: string): Promise<StateA
       - finance_api_url (string): The most relevant public API/raw data URL for PPE or finance data.
       - assessment_api_url (string): The most relevant public API/raw data URL for test/proficiency data.
       - source_authority (string): The name of the agency or portal that hosts the data.
-    `;
-    
-    const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        config: { 
-            tools: [{ googleSearch: {} }],
-            thinkingConfig: { thinkingBudget: 32768 },
-            safetySettings: [
-                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-            ]
-        },
-        contents: prompt
-    });
+    `});
 
     const text = response.text;
     if (!text) return null;
     
-    const clean = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-    return JSON.parse(clean) as StateApiDiscovery;
+    return safeJsonParse(text) as StateApiDiscovery;
   } catch (e) {
     console.warn("API Discovery Failed", e);
     return null;
@@ -78,11 +67,14 @@ export const find_state_api = async (state_abbreviation: string): Promise<StateA
  */
 export const fetchStateLevelData = async (state: string, districtName: string): Promise<StateFiscalData | null> => {
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        
-        // Construct a targeted search query for official state data
-        const prompt = `
-          ACT AS A DATA SCRAPER. 
+        const response = await genAI.models.generateContent({
+            model: PRO_MODEL,
+            config: {
+                tools: [{ googleSearch: {} }] as any,
+                responseMimeType: "application/json",
+                safetySettings
+            },
+            contents: `ACT AS A DATA SCRAPER.
           Task: Find official State Department of Education data for: "${districtName}" in ${state}.
           
           MANDATE: Perform a Google Search for these exact terms:
@@ -104,28 +96,12 @@ export const fetchStateLevelData = async (state: string, districtName: string): 
             "enrollment": number,
             "source": "String (e.g. 'Maryland State Dept of Education Report Card')"
           }
-        `;
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-preview',
-            config: { 
-                tools: [{ googleSearch: {} }],
-                thinkingConfig: { thinkingBudget: 32768 },
-                responseMimeType: 'application/json',
-                safetySettings: [
-                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-                ]
-            },
-            contents: prompt
-        });
+        `});
 
         const text = response.text;
         if (!text) return null;
 
-        const cleanJson = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-        const data = JSON.parse(cleanJson);
+        const data = safeJsonParse(text);
 
         // Basic Validation
         if (!data.ppe || !data.proficiency) return null;

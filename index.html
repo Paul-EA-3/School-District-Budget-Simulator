@@ -11,24 +11,17 @@
     <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="%23312E81" /><text x="32" y="45" font-family="sans-serif" font-weight="900" font-size="34" text-anchor="middle" fill="%23F97316">EA</text></svg>' type="image/svg+xml">
     
     <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-45LLBD1494"></script>
+    <script async src="https://www.googletagmanager.com/gtag/js?id=%VITE_GA_TRACKING_ID%"></script>
     <script>
       window.dataLayer = window.dataLayer || [];
       function gtag(){dataLayer.push(arguments);}
       gtag('js', new Date());
 
-      gtag('config', 'G-45LLBD1494');
+      gtag('config', '%VITE_GA_TRACKING_ID%');
     </script>
 
     <!-- Google Maps API -->
-    <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCiD_nvIwBDZazkayaZykUm39rfHxIAAuk&libraries=places&loading=async"></script>
-
-    <!-- Polyfill for process.env to prevent ReferenceError in browser -->
-    <script>
-      window.process = window.process || {};
-      window.process.env = window.process.env || {};
-      window.process.env.API_KEY = 'AIzaSyCiD_nvIwBDZazkayaZykUm39rfHxIAAuk';
-    </script>
+    <script async src="https://maps.googleapis.com/maps/api/js?key=%VITE_GOOGLE_MAPS_API_KEY%&libraries=places&loading=async"></script>
 
     <style>
         /* Custom Scrollbar for Grid containers */

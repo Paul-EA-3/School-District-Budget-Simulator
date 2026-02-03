@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MapPin, Search, Loader2, ArrowRight, Building2, School, AlertCircle, CheckCircle2 } from 'lucide-react';
 import Logo from './Logo';
-import { GoogleGenAI } from "@google/genai";
+import genAI, { FAST_MODEL } from '../services/gemini';
 
 // Fix for missing google types
 declare global {
@@ -240,9 +240,9 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
   const identifyDistrictWithAI = async (name: string, address: string) => {
     setIsIdentifying(true);
     try {
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const prompt = `
-            I have a user selecting a school in the United States.
+        const response = await genAI.models.generateContent({
+            model: FAST_MODEL,
+            contents: `I have a user selecting a school in the United States.
             School Name: ${name}
             Address: ${address}
             
@@ -250,12 +250,7 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
             If the selected place IS a school district, return its name.
             
             Return ONLY the School District Name (e.g., "Los Angeles Unified School District"). Do not add extra text.
-        `;
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt
-        });
+        `});
 
         const text = response.text?.trim();
         if (text) setDistrictName(text);
