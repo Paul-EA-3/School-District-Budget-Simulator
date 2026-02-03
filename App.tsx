@@ -10,9 +10,11 @@ import NarrativeBuilder from './components/NarrativeBuilder';
 import Logo from './components/Logo';
 import DistrictSelector from './components/DistrictSelector';
 import ChatOverlay from './components/ChatOverlay';
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
+import LoadingScreen from './components/LoadingScreen';
+import SimulationResults from './components/SimulationResults';
 import { fetchUSAspending, fetchSocrataBudget, fetchStateLevelData, find_state_api, StateFiscalData, StateApiDiscovery } from './services/api';
 import { harmonize_api_data } from './services/harmonizer';
+import genAI, { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings } from './services/gemini';
 
 const App: React.FC = () => {
   // --- 1. STATE INITIALIZATION ---
@@ -80,12 +82,12 @@ const App: React.FC = () => {
             if (!isActive) return;
             try {
                 // Keep Fact Gen on Flash for speed
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-                const response = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash',
+                const response = await genAI.models.generateContent({
+                    model: FAST_MODEL,
                     contents: "Generate a single, fascinating, one-sentence statistic about US school district finance."
                 });
-                if (response.text && isActive) setLoadingFact(response.text.trim());
+                const text = response.text;
+                if (text && isActive) setLoadingFact(text.trim());
             } catch(e) {
                 if (isActive) setLoadingFact(EDUCATION_STATS[Math.floor(Math.random() * EDUCATION_STATS.length)]);
             }
@@ -136,25 +138,6 @@ const App: React.FC = () => {
       setLoadingLog(prev => [...prev, `> ${msg}`]);
   };
 
-  // Helper: Safe JSON Parse
-  const safeJsonParse = (text: string) => {
-      try {
-          let clean = text.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
-          clean = clean.replace(/[\n\r\t]/g, ' '); 
-          return JSON.parse(clean);
-      } catch (e) {
-          console.warn("JSON Parse Error, attempting recovery...", e);
-          const match = text.match(/\{[\s\S]*\}/);
-          if (match) {
-              try {
-                  return JSON.parse(match[0].replace(/[\n\r\t]/g, ' '));
-              } catch (e2) {
-                  return null;
-              }
-          }
-          return null;
-      }
-  };
 
   /**
    * Helper: Fetch District Data from discovered APIs.
@@ -198,7 +181,6 @@ const App: React.FC = () => {
     setIsGeneratingBriefing(true);
     setLoadingLog([`> Initiating forensic analysis for ${context.name}...`]);
     
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     let localStateData: StateFiscalData | null = null;
     let externalApiData: any = null;
     const sourcesFound: string[] = [];
@@ -287,18 +269,12 @@ const App: React.FC = () => {
     `;
 
     try {
-        // UPDATED: Using Gemini 3 Pro + Thinking
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-preview',
-            config: { 
-                tools: [{ googleSearch: {} }],
-                thinkingConfig: { thinkingBudget: 32768 },
+        const response = await genAI.models.generateContent({
+            model: PRO_MODEL,
+            config: {
+                tools: [{ googleSearch: {} }] as any,
                 responseMimeType: 'application/json',
-                safetySettings: [
-                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-                ]
+                safetySettings
             },
             contents: prompt
         });
@@ -350,8 +326,6 @@ const App: React.FC = () => {
     setIsGeneratingSim(true);
     // NOTE: This runs in background usually
 
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
     try {
         const prompt = `
           CRITICAL: Data API. Output JSON only.
@@ -376,18 +350,12 @@ const App: React.FC = () => {
           }
         `;
 
-        // UPDATED: Using Gemini 3 Pro + Thinking
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-preview',
-            config: { 
-                tools: [{ googleSearch: {} }],
-                thinkingConfig: { thinkingBudget: 32768 },
-                responseMimeType: 'application/json', 
-                safetySettings: [
-                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-                ]
+        const response = await genAI.models.generateContent({
+            model: PRO_MODEL,
+            config: {
+                tools: [{ googleSearch: {} }] as any,
+                responseMimeType: 'application/json',
+                safetySettings
             },
             contents: prompt
         });
@@ -527,22 +495,16 @@ const App: React.FC = () => {
     `;
 
     try {
-        // UPDATED: Using Gemini 3 Pro + Thinking
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const res = await ai.models.generateContent({
-            model: 'gemini-3-pro-preview',
-            config: { 
-                thinkingConfig: { thinkingBudget: 32768 },
+        const response = await genAI.models.generateContent({
+            model: PRO_MODEL,
+            config: {
                 responseMimeType: 'application/json',
-                safetySettings: [
-                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-                ]
+                safetySettings
             },
             contents: prompt
         });
-        const data = safeJsonParse(res.text!);
+        const text = response.text;
+        const data = safeJsonParse(text);
         if(!data) throw new Error("Invalid JSON");
         setBoardFeedback(data);
         setSimulationEnded(true);
@@ -558,22 +520,15 @@ const App: React.FC = () => {
     setIsChatTyping(true);
     setChatHistory(p => [...p, { role: 'user', text: msg }]);
     try {
-        // UPDATED: Using Gemini 3 Pro + Thinking
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const chat = ai.chats.create({ 
-            model: 'gemini-3-pro-preview', 
+        const chat = genAI.chats.create({
+            model: PRO_MODEL,
             history: chatHistory.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
             config: {
-                thinkingConfig: { thinkingBudget: 32768 },
-                safetySettings: [
-                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
-                ]
+                safetySettings
             }
         });
-        const res = await chat.sendMessage({ message: msg });
-        setChatHistory(p => [...p, { role: 'model', text: res.text || "..." }]);
+        const response = await chat.sendMessage({ message: msg });
+        setChatHistory(p => [...p, { role: 'model', text: response.text || "..." }]);
     } catch(e) {
         setChatHistory(p => [...p, { role: 'model', text: "Connection error." }]);
     } finally {
@@ -600,40 +555,21 @@ const App: React.FC = () => {
   
   if (isGeneratingBriefing) {
       return (
-        <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white relative overflow-hidden">
-            <div className="z-10 flex flex-col items-center max-w-2xl w-full text-center">
-                <Loader2 className="w-16 h-16 text-blue-300 animate-spin mb-6" />
-                <h2 className="text-2xl font-bold mb-2">Forensic Analysis...</h2>
-                
-                {/* Live Action Log */}
-                <div className="bg-indigo-950/50 rounded-lg p-4 font-mono text-xs text-left w-full h-[120px] overflow-y-auto mb-6 border border-indigo-800 shadow-inner">
-                    {loadingLog.map((log, i) => (
-                        <div key={i} className="text-blue-300 mb-1 last:text-white last:font-bold last:animate-pulse">
-                            {log}
-                        </div>
-                    ))}
-                </div>
-
-                <div className="bg-indigo-800/50 border border-indigo-700 p-6 rounded-xl max-w-lg w-full">
-                    <div className="flex items-center justify-center gap-2 mb-3 text-blue-300 text-xs font-bold uppercase tracking-widest">
-                        <Info className="w-4 h-4" /> Did you know?
-                    </div>
-                    <p key={loadingFact} className="text-lg font-serif leading-relaxed animate-in fade-in duration-500">"{loadingFact}"</p>
-                </div>
-            </div>
-        </div>
+        <LoadingScreen
+            title="Forensic Analysis..."
+            loadingLog={loadingLog}
+            loadingFact={loadingFact}
+        />
       );
   }
 
   if (started && !simGenerationComplete) {
       return (
-        <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white relative overflow-hidden">
-            <div className="z-10 flex flex-col items-center max-w-2xl w-full text-center">
-                <Loader2 className="w-16 h-16 text-blue-300 animate-spin mb-6" />
-                <h2 className="text-2xl font-bold mb-2">Building Simulation...</h2>
-                <p className="text-blue-200 mb-8">Processing School Rosters & Financials...</p>
-            </div>
-        </div>
+        <LoadingScreen
+            title="Building Simulation..."
+            subtitle="Processing School Rosters & Financials..."
+            loadingFact={loadingFact}
+        />
       );
   }
 
@@ -701,13 +637,7 @@ const App: React.FC = () => {
                 </div>
 
                 {simulationEnded && boardFeedback ? (
-                    <div className="bg-white p-8 rounded-2xl shadow-xl text-center max-w-2xl mx-auto border-t-8 border-indigo-900">
-                        <div className="mb-4 text-6xl">{boardFeedback.approved ? '🎉' : '❌'}</div>
-                        <h2 className="text-3xl font-bold text-indigo-900 mb-2">{boardFeedback.approved ? 'Budget Adopted' : 'Budget Rejected'}</h2>
-                        <p className="text-slate-500 mb-6 font-mono font-bold">Vote: {boardFeedback.voteCount}</p>
-                        <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 text-left italic text-slate-700 mb-8">"{boardFeedback.feedback}"</div>
-                        <button onClick={handleRestart} className="bg-slate-800 text-white px-6 py-3 rounded-lg hover:bg-slate-700">Start Over</button>
-                    </div>
+                    <SimulationResults feedback={boardFeedback} onRestart={handleRestart} />
                 ) : (
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div className="lg:col-span-2 space-y-6">
