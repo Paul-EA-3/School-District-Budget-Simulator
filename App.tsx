@@ -1,460 +1,108 @@
-
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { PieChart, CheckCircle, XCircle, RefreshCcw, ArrowRight, ExternalLink, MessageSquare, RotateCcw, Loader2, BrainCircuit, Info, Send, User, Users } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { CheckCircle, XCircle, RefreshCcw, ArrowRight, MessageSquare, RotateCcw, Loader2, Info, BrainCircuit, Bot, Terminal } from 'lucide-react';
 import { SCENARIOS, CARD_POOL, EDUCATION_STATS, PoolCard } from './constants';
-import { GameState, School, Card, SelectionState } from './types';
-import ScenarioCard from './components/ScenarioCard';
+import { GameState, School, Card, SelectionState, Scenario } from './types';
 import OnboardingModal from './components/OnboardingModal';
 import Cockpit from './components/Cockpit';
 import Scatterplot from './components/Scatterplot';
 import TheGrid from './components/TheGrid';
 import NarrativeBuilder from './components/NarrativeBuilder';
 import Logo from './components/Logo';
-import EdunomicsLogo from './components/EdunomicsLogo';
 import DistrictSelector from './components/DistrictSelector';
+import ChatOverlay from './components/ChatOverlay';
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
-import { fetchCensusFinance, fetchSocrataBudget } from './services/api';
+import { fetchUSAspending, fetchSocrataBudget, fetchStateLevelData, find_state_api, StateFiscalData, StateApiDiscovery } from './services/api';
+import { harmonize_api_data } from './services/harmonizer';
 
 const App: React.FC = () => {
+  // --- 1. STATE INITIALIZATION ---
+  const [districtContext, setDistrictContext] = useState<{name: string, location: string, state: string} | null>(null);
   const [scenarioId, setScenarioId] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   
-  // Loading States
-  const [isGeneratingBriefing, setIsGeneratingBriefing] = useState(false); // Phase 1
-  const [isGeneratingSim, setIsGeneratingSim] = useState(false); // Phase 2
-  const [loadingMessage, setLoadingMessage] = useState("Initializing...");
-  
+  // Loading & Logs
+  const [isGeneratingBriefing, setIsGeneratingBriefing] = useState(false);
+  const [isGeneratingSim, setIsGeneratingSim] = useState(false);
+  const [simGenerationComplete, setSimGenerationComplete] = useState(false);
   const [loadingFact, setLoadingFact] = useState(EDUCATION_STATS[0]);
-  const [loadingSeconds, setLoadingSeconds] = useState(5);
+  const [loadingLog, setLoadingLog] = useState<string[]>([]); // New: Action Log
 
-  // Scroll State for Compact Header
-  const [isCompact, setIsCompact] = useState(false);
-
-  // Base State (Start of current Year)
+  // Data Models
   const [baseGameState, setBaseGameState] = useState<GameState | null>(null);
   const [schools, setSchools] = useState<School[]>([]);
-
-  // Computed/Active State
   const [gameState, setGameState] = useState<GameState | null>(null);
   
-  // History & Decisions
+  // External Data Sources
+  const [stateData, setStateData] = useState<StateFiscalData | null>(null);
+  const [dataSources, setDataSources] = useState<string[]>([]);
+  const [discoveredApi, setDiscoveredApi] = useState<StateApiDiscovery | null>(null);
+
+  // Gameplay
   const [decisions, setDecisions] = useState<Card[]>([]);
   const [history, setHistory] = useState<Card[][]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [fundedUniqueIds, setFundedUniqueIds] = useState<Set<string>>(new Set<string>());
   const [oneTimeUsed, setOneTimeUsed] = useState(0);
   
-  // AI Board State
+  // Results
   const [simulationEnded, setSimulationEnded] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [finalNarrative, setFinalNarrative] = useState('');
   const [boardFeedback, setBoardFeedback] = useState<{approved: boolean, feedback: string, voteCount: string} | null>(null);
-
-  // Board Chat State
-  const [chatHistory, setChatHistory] = useState<{role: 'user' | 'model', text: string}[]>([]);
-  const [chatInput, setChatInput] = useState('');
-  const [isChatting, setIsChatting] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  // AI Context
-  const [customContext, setCustomContext] = useState<{name: string, location: string, state: string} | null>(null);
   
-  // Real Data Sources
-  const [censusSource, setCensusSource] = useState<string | null>(null);
+  // UI & Chat
+  const [isCompact, setIsCompact] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatHistory, setChatHistory] = useState<{role: 'user'|'model', text: string}[]>([]);
+  const [isChatTyping, setIsChatTyping] = useState(false);
 
+  // --- 2. EFFECT HOOKS ---
 
-  // --- Scroll Listener ---
   useEffect(() => {
-    const handleScroll = () => {
-      const threshold = 50;
-      setIsCompact(window.scrollY > threshold);
-    };
-    
+    const handleScroll = () => setIsCompact(window.scrollY > 50);
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Auto-scroll chat
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatHistory, simulationEnded]);
-
-  // --- Proposal Generator Logic (Helper) ---
-  const generateProposals = (scenarioId: string, structuralGap: number, fundedIds: Set<string>): Card[] => {
-    const TARGET_COUNT = 8;
-    
-    // 1. Filter Pool by Scenario Compatibility
-    let eligibleCards = CARD_POOL.filter(card => 
-        card.validScenarios.includes('all') || card.validScenarios.includes(scenarioId as any)
-    );
-
-    // 2. Remove "Unique" cards that have already been funded
-    eligibleCards = eligibleCards.filter(card => 
-        !card.unique || !fundedIds.has(card.id)
-    );
-
-    // 3. Contextual Selection Logic
-    // If Gap is worse than -$1M, ensure we have Savings options
-    const isDeficitCrisis = structuralGap < -1000000;
-    
-    let finalSelection: PoolCard[] = [];
-    const savingsCards = eligibleCards.filter(c => c.cost < 0);
-    
-    if (isDeficitCrisis) {
-        // Force 3 Savings cards
-        const shuffledSavings = [...savingsCards].sort(() => Math.random() - 0.5);
-        finalSelection.push(...shuffledSavings.slice(0, 3));
-    } else {
-        // Ensure at least 1 savings card regardless
-        const shuffledSavings = [...savingsCards].sort(() => Math.random() - 0.5);
-        finalSelection.push(...shuffledSavings.slice(0, 1));
+    if (scenarioId && !simGenerationComplete && !isGeneratingSim && !started) {
+        generateSimulationData();
     }
+  }, [scenarioId, started]);
 
-    // Fill the rest randomly from remaining pool
-    const chosenIds = new Set(finalSelection.map(c => c.id));
-    
-    const remainingPool = eligibleCards.filter(c => !chosenIds.has(c.id));
-    const shuffledRemaining = [...remainingPool].sort(() => Math.random() - 0.5);
-    
-    const remainingCount = Math.max(0, TARGET_COUNT - finalSelection.length);
-    finalSelection.push(...shuffledRemaining.slice(0, remainingCount));
-
-    // 4. Map to Card type (add selected: 'None') and Shuffle final hand
-    return finalSelection
-        .map(c => ({
-            id: c.id,
-            title: c.title,
-            description: c.description,
-            cost: c.cost,
-            studentsServed: c.studentsServed,
-            isRecurring: c.isRecurring,
-            riskFactor: c.riskFactor,
-            riskDescription: c.riskDescription,
-            category: c.category,
-            selected: 'None' as SelectionState
-        }))
-        .sort(() => Math.random() - 0.5);
-  };
-
-  // --- AI Facts Generator ---
-  const generateAIFact = async () => {
-     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const prompt = "Generate a single, surprising, one-sentence statistic about US school district finance or budgeting. It should be educational.";
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt
-      });
-      
-      const text = response.text;
-      if (text) {
-          setLoadingFact(text.trim());
-      }
-    } catch (e) {
-      console.log("AI Fact Generation failed, using static.");
-    }
-  };
-
-  // --- Phase 2 Loading Screen Logic ---
+  // Loading Logic
   useEffect(() => {
-    if (isGeneratingSim) {
-        setLoadingSeconds(15); 
-        generateAIFact(); 
+    let isActive = true;
+    let factInterval: ReturnType<typeof setInterval>;
 
-        const timer = setInterval(() => {
-            setLoadingSeconds(prev => Math.max(0, prev - 1));
-        }, 1000);
-        
-        const factRotator = setInterval(() => {
-            setLoadingFact(EDUCATION_STATS[Math.floor(Math.random() * EDUCATION_STATS.length)]);
-        }, 4000);
-
-        return () => {
-            clearInterval(timer);
-            clearInterval(factRotator);
-        };
-    }
-  }, [isGeneratingSim]);
-
-  // --- AI Director Phase 1: Briefing Generation ---
-  const generateBriefingData = async (districtContext: { name: string, location: string, state: string }) => {
-    setIsGeneratingBriefing(true);
-    setCustomContext(districtContext);
-
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const prompt = `
-      Act as a Forensic Education Financial Auditor for the state of ${districtContext.state}.
-      
-      OBJECTIVE: Retrieve ACTUAL PUBLIC RECORDS for:
-      District: ${districtContext.name}
-      Location: ${districtContext.location}
-      
-      INSTRUCTIONS:
-      1. **Structural Deficit**: Search your knowledge base for recent (2023-2025) news articles, state audit reports, or board meeting minutes regarding this specific district's budget.
-         - If they have a reported deficit, use that EXACT number (e.g., -$35M).
-         - If no specific news exists, estimate based on the ${districtContext.state} per-pupil funding formula and recent enrollment trends for this area.
-      2. **Community Trust**: Assess trust based on HEADLINES. (e.g., recent strikes? failed bonds? superintendent turnover? = Low Trust).
-      3. **Federal Grants**: Estimate the remaining ESSER III / ARPA cliff based on Title I allocations for this district.
-      
-      RETURN ONLY RAW JSON:
-      {
-        "archetype": "urban" | "suburban" | "rural",
-        "title": "String (e.g. 'Urban / $35M Structural Deficit')",
-        "description": "String (2-3 sentences citing the specific context/news if available)",
-        "initialState": {
-             "year": 2025,
-             "enrollment": number, // Actual enrollment
-             "revenue": { "local": number, "state": number, "federalOneTime": number },
-             "expenditures": { "personnel": number, "operations": number, "fixed": number },
-             "fundBalance": number,
-             "structuralGap": number, // Negative if deficit
-             "communityTrust": number
-        }
-      }
-    `;
-
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            config: { responseMimeType: 'application/json' },
-            contents: prompt
-        });
-        
-        const text = response.text;
-        if(!text) throw new Error("Empty AI Response");
-        const data = JSON.parse(text.replace(/^```json\s*/, '').replace(/\s*```$/, ''));
-        
-        const archetypeId = data.archetype || 'suburban';
-        const validId = ['urban', 'suburban', 'rural'].includes(archetypeId) ? archetypeId : 'suburban';
-
-        // Create Preliminary Scenario (No schools/cards yet)
-        const briefingScenario = {
-            id: validId,
-            title: data.title,
-            description: data.description,
-            icon: SCENARIOS[validId].icon,
-            difficulty: 'Custom',
-            initialState: data.initialState,
-            initialSchools: [], 
-            initialCards: [] 
-        };
-
-        SCENARIOS[validId] = briefingScenario as any;
-        setBaseGameState(data.initialState);
-        setScenarioId(validId); // Shows Briefing Screen
-
-    } catch (e) {
-        console.error("Briefing Generation Failed:", e);
-        // Fallback
-        handleSelectScenario('suburban');
-    } finally {
-        setIsGeneratingBriefing(false);
-    }
-  };
-
-  // --- AI Director Phase 2: Deep Simulation Generation ---
-  const generateSimulationData = async () => {
-    if (!scenarioId || !customContext) return;
-    
-    setIsGeneratingSim(true);
-    const currentScenario = SCENARIOS[scenarioId];
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-    try {
-        // --- STEP 1: Resolve NCES ID & Real Financials ---
-        setLoadingMessage("Querying NCES Database...");
-        
-        let realFinancials = null;
-        
-        // Ask AI for the NCES ID first (Client-side heuristic)
-        const ncesPrompt = `Return the 7-digit NCES District ID for "${customContext.name}" in ${customContext.state}. Return ONLY the 7-digit string.`;
-        const idResponse = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: ncesPrompt
-        });
-        const ncesId = idResponse.text?.trim().replace(/[^0-9]/g, '');
-
-        if (ncesId && ncesId.length === 7) {
-            setLoadingMessage("Fetching Real Census Data (F-33)...");
-            realFinancials = await fetchCensusFinance(ncesId);
-            if (realFinancials) {
-                setCensusSource(realFinancials.source);
+    if (isGeneratingBriefing || (isGeneratingSim && started)) {
+        const fetchFact = async () => {
+            if (!isActive) return;
+            try {
+                // Keep Fact Gen on Flash for speed
+                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+                const response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash',
+                    contents: "Generate a single, fascinating, one-sentence statistic about US school district finance."
+                });
+                if (response.text && isActive) setLoadingFact(response.text.trim());
+            } catch(e) {
+                if (isActive) setLoadingFact(EDUCATION_STATS[Math.floor(Math.random() * EDUCATION_STATS.length)]);
             }
-        }
-
-        // --- STEP 2: Generate Simulation with Real Data Injection ---
-        setLoadingMessage("Building District Model...");
-        
-        const simPrompt = `
-          Context: We are simulating ${customContext.name} in ${customContext.state}.
-          
-          ${realFinancials ? `
-          *** KNOWN FINANCIAL FACTS (FROM US CENSUS) ***
-          - Total Revenue: $${realFinancials.revenue.toLocaleString()}
-          - Total Expenditure: $${realFinancials.expenditure.toLocaleString()}
-          - Salary Expenditure: $${realFinancials.salaries.toLocaleString()}
-          - Federal Rev (Proxy for Grants): $${realFinancials.federalRevenue.toLocaleString()}
-          
-          INSTRUCTION: Use these EXACT numbers for the financial baseline. Do not estimate them. 
-          Use your knowledge to fill in the remaining qualitative gaps (like 'Community Trust' or specific cuts needed).
-          ` : ''}
-          
-          TASK: RETRIEVE THE OFFICIAL SCHOOL ROSTER (NCES / State Dept of Education Data).
-          
-          1. List EVERY SINGLE SCHOOL in this district. 
-          2. **DO NOT TRUNCATE THE LIST**. If the district has 50 schools, list all 50. If 100, list 100.
-          3. For each school, provide:
-             - Real Name (e.g., "Lincoln High")
-             - Type (Elementary/Middle/High)
-             - Estimated Enrollment
-             - Poverty Rate (Free/Reduced Lunch %)
-             - Academic Proficiency (Math/ELA %) based on ${customContext.state} standardized test averages for that demographic.
-          
-          RETURN ONLY RAW JSON:
-          {
-            "initialSchools": [
-                { "id": "s1", "name": "String", "type": "High"|"Middle"|"Elementary", "enrollment": number, "spendingPerPupil": number, "academicOutcome": { "math": number, "ela": number }, "povertyRate": number, "principal": "String", "staffing": { "senior": number, "junior": number } }
-            ]
-          }
-        `;
-
-        // 1. Generate Schools
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            config: { 
-                responseMimeType: 'application/json',
-                maxOutputTokens: 8192 // Max tokens to ensure full roster isn't cut off
-            },
-            contents: simPrompt
-        });
-        
-        const text = response.text;
-        if(!text) throw new Error("Empty AI Response");
-        const data = JSON.parse(text.replace(/^```json\s*/, '').replace(/\s*```$/, ''));
-        
-        // 2. Generate Cards (Local Logic)
-        const initialProposals = generateProposals(scenarioId, currentScenario.initialState.structuralGap, new Set<string>());
-
-        // 3. Update State (Merge Real Financials if available)
-        setSchools(data.initialSchools);
-        
-        if (realFinancials && baseGameState) {
-            const updatedState = {
-                ...baseGameState,
-                revenue: {
-                    ...baseGameState.revenue,
-                    local: Math.max(0, realFinancials.revenue - realFinancials.federalRevenue - 10000000), // Estimate state/local split
-                    state: 10000000, // Placeholder split if unknown
-                    federalOneTime: realFinancials.federalRevenue
-                },
-                expenditures: {
-                    ...baseGameState.expenditures,
-                    personnel: realFinancials.salaries,
-                    operations: Math.max(0, realFinancials.expenditure - realFinancials.salaries - 1000000),
-                    fixed: 1000000
-                },
-                // Recalculate gap based on real expenditure vs revenue
-                structuralGap: realFinancials.revenue - realFinancials.expenditure
-            };
-            setBaseGameState(updatedState);
-            setGameState(updatedState); // Ensure active state matches base
-        }
-
-        setDecisions(initialProposals);
-        setHistory([initialProposals]);
-        setHistoryIndex(0);
-        setFundedUniqueIds(new Set<string>());
-        
-        // 4. Start
-        setStarted(true);
-
-    } catch (e) {
-        console.error("Sim Generation Failed:", e);
-        // Fallback Schools
-        setSchools(SCENARIOS['suburban'].initialSchools);
-        setDecisions(generateProposals(scenarioId, -1000000, new Set()));
-        setStarted(true);
-    } finally {
-        setIsGeneratingSim(false);
+        };
+        fetchFact();
+        factInterval = setInterval(fetchFact, 4000);
     }
-  };
 
-  const handleDistrictSelect = (context: { name: string, location: string, state: string }) => {
-      generateBriefingData(context);
-  };
+    return () => {
+        isActive = false;
+        clearInterval(factInterval);
+    };
+  }, [isGeneratingBriefing, isGeneratingSim, started]);
 
-  const handleAcceptAssignment = () => {
-      generateSimulationData();
-  };
-
-
-  // --- Scenario Initialization (Legacy/Fallback) ---
-  const handleSelectScenario = async (id: string) => {
-    // Legacy fallback code...
-    const scenario = SCENARIOS[id];
-    const initialProposals = generateProposals(id, scenario.initialState.structuralGap, new Set<string>());
-    setSchools(scenario.initialSchools);
-    setBaseGameState(scenario.initialState);
-    setDecisions(initialProposals);
-    setHistory([initialProposals]);
-    setHistoryIndex(0);
-    setScenarioId(id);
-    setStarted(false); // Go to Briefing
-  };
-
-  // Compute Game State based on Decisions
-  useEffect(() => {
-    if (!baseGameState || !scenarioId) return;
-
-    const fundedRecurring = decisions.filter(d => d.selected === 'Fund');
-    const fundedOneTime = decisions.filter(d => d.selected === 'OneTime');
-    const allFunded = [...fundedRecurring, ...fundedOneTime];
-    
-    const totalOneTimeSpend = fundedOneTime.reduce((acc, curr) => acc + curr.cost, 0);
-    setOneTimeUsed(totalOneTimeSpend);
-
-    // Calculate Structural Gap
-    const initialGap = baseGameState.structuralGap;
-    const recurringCostAdjustment = decisions.reduce((acc, curr) => {
-      if ((curr.selected === 'Fund' || curr.selected === 'OneTime') && curr.isRecurring) {
-        return acc + curr.cost;
-      }
-      return acc;
-    }, 0);
-    const newStructuralGap = initialGap - recurringCostAdjustment;
-
-    // Calculate Fund Balance
-    const initialFundBalance = baseGameState.fundBalance;
-    const availableOneTime = baseGameState.revenue.federalOneTime;
-    
-    const excessOneTimeSpend = Math.max(0, totalOneTimeSpend - availableOneTime);
-    const recurringSpend = fundedRecurring.reduce((acc, curr) => acc + curr.cost, 0);
-    
-    const netFundBalanceChange = -(recurringSpend + excessOneTimeSpend);
-    const newFundBalance = initialFundBalance + netFundBalanceChange;
-
-    // Calculate Trust
-    let trustChange = 0;
-    allFunded.forEach(d => {
-      if (d.riskFactor === 'High') trustChange -= 10;
-      if (d.riskFactor === 'Medium') trustChange -= 5;
-    });
-    
-    const initialTrust = baseGameState.communityTrust;
-
-    setGameState({
-      ...baseGameState,
-      structuralGap: newStructuralGap,
-      fundBalance: newFundBalance,
-      communityTrust: Math.max(0, Math.min(100, initialTrust + trustChange)),
-    });
-
-  }, [decisions, baseGameState, scenarioId]);
-
-  // Computed Schools for rendering
+  // --- 3. MEMOIZED VALUES ---
   const derivedSchools = useMemo(() => {
-     if(!schools.length) return [];
+     if(!schools || schools.length === 0) return [];
      return schools.map(s => {
       let newSpend = s.spendingPerPupil;
       let newMath = s.academicOutcome.math;
@@ -472,7 +120,7 @@ const App: React.FC = () => {
       if (decisions.find(d => d.title.includes('Tutoring') && (d.selected === 'Fund' || d.selected === 'OneTime'))) {
         newMath += 4;
       }
-      if (decisions.find(d => d.title.includes('Arts') && d.cost < 0 && d.selected === 'Fund')) {
+      if (decisions.find(d => d.title.includes('Arts') && d.selected === 'Fund')) { 
              newEla -= 2; 
       }
 
@@ -481,583 +129,640 @@ const App: React.FC = () => {
   }, [decisions, schools]);
 
 
-  const updateDecisions = (newDecisions: Card[]) => {
-    const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(newDecisions);
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-    setDecisions(newDecisions);
+  // --- 4. ACTION HANDLERS ---
+
+  // Helper: Append Log
+  const addLog = (msg: string) => {
+      setLoadingLog(prev => [...prev, `> ${msg}`]);
+  };
+
+  // Helper: Safe JSON Parse
+  const safeJsonParse = (text: string) => {
+      try {
+          let clean = text.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
+          clean = clean.replace(/[\n\r\t]/g, ' '); 
+          return JSON.parse(clean);
+      } catch (e) {
+          console.warn("JSON Parse Error, attempting recovery...", e);
+          const match = text.match(/\{[\s\S]*\}/);
+          if (match) {
+              try {
+                  return JSON.parse(match[0].replace(/[\n\r\t]/g, ' '));
+              } catch (e2) {
+                  return null;
+              }
+          }
+          return null;
+      }
+  };
+
+  /**
+   * Helper: Fetch District Data from discovered APIs.
+   */
+  const fetch_district_data = async (district_id: string, api_urls: StateApiDiscovery) => {
+      try {
+          const financeUrl = api_urls.finance_api_url.replace('{DISTRICT_ID}', district_id);
+          const assessmentUrl = api_urls.assessment_api_url.replace('{DISTRICT_ID}', district_id);
+
+          const [financeRes, assessmentRes] = await Promise.all([
+              fetch(financeUrl).catch(e => ({ ok: false, statusText: e.message })),
+              fetch(assessmentUrl).catch(e => ({ ok: false, statusText: e.message }))
+          ]);
+
+          let financeData = null;
+          let assessmentData = null;
+
+          if ((financeRes as Response).ok) {
+              financeData = await (financeRes as Response).json();
+          } else {
+              console.warn(`Finance API Failed: ${(financeRes as any).statusText}`);
+          }
+
+          if ((assessmentRes as Response).ok) {
+              assessmentData = await (assessmentRes as Response).json();
+          } else {
+              console.warn(`Assessment API Failed: ${(assessmentRes as any).statusText}`);
+          }
+
+          return { financeData, assessmentData };
+
+      } catch (e) {
+          console.error("fetch_district_data Critical Error:", e);
+          return null; 
+      }
+  };
+
+  // Phase 1: Briefing
+  const handleDistrictSelect = async (context: {name: string, location: string, state: string}) => {
+    setDistrictContext(context);
+    setIsGeneratingBriefing(true);
+    setLoadingLog([`> Initiating forensic analysis for ${context.name}...`]);
+    
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    let localStateData: StateFiscalData | null = null;
+    let externalApiData: any = null;
+    const sourcesFound: string[] = [];
+
+    // LEVEL 0.5: API DISCOVERY
+    try {
+        addLog(`Locating ${context.state} Education Data Portals...`);
+        const foundApi = await find_state_api(context.state);
+        
+        if (foundApi) {
+            setDiscoveredApi(foundApi);
+            addLog(`Found Data Source: ${foundApi.source_authority}`);
+            sourcesFound.push(foundApi.source_authority);
+            
+            if (foundApi.finance_api_url.includes('?') || foundApi.assessment_api_url.includes('?')) {
+                 addLog(`Querying External API: ${foundApi.source_authority}...`);
+                 externalApiData = await fetch_district_data(encodeURIComponent(context.name), foundApi);
+                 
+                 if (externalApiData?.financeData || externalApiData?.assessmentData) {
+                     addLog("External API Data Retrieved Successfully.");
+                     const harmonizedSchools = harmonize_api_data(externalApiData.financeData, externalApiData.assessmentData);
+                     if (harmonizedSchools.length > 0) {
+                         setSchools(harmonizedSchools);
+                         addLog(`Harmonized ${harmonizedSchools.length} schools from live data.`);
+                     }
+                 }
+            }
+        }
+    } catch(e) { console.warn("API Discovery Failed", e); }
+
+    // LEVEL 1: STATE DATA SCRAPER (Gold Standard)
+    if (!externalApiData) {
+        try {
+            addLog(`Querying ${context.state} Department of Education...`);
+            localStateData = await fetchStateLevelData(context.state, context.name);
+            if (localStateData) {
+                setStateData(localStateData);
+                sourcesFound.push(localStateData.source);
+                addLog(`Found State Report Card: PPE $${localStateData.ppe}`);
+            } else {
+                addLog(`State specific data not found, estimating from regional averages...`);
+            }
+        } catch (e) { console.warn("State Data Fetch Failed", e); }
+    }
+
+    // LEVEL 2: USAspending
+    try {
+        addLog("Verifying Federal Grant Allocations...");
+        const federalContext = await fetchUSAspending(context.name);
+        if (federalContext) {
+            sourcesFound.push(federalContext.source);
+            addLog("USAspending.gov entry found.");
+        }
+    } catch (e) { console.warn("USAspending Fetch Failed", e); }
+
+    setDataSources(sourcesFound);
+    addLog("Synthesizing Strategic Briefing...");
+    
+    const prompt = `
+      Act as a Forensic Auditor for ${context.state}. Target: ${context.name} (${context.location})
+      
+      *** DATA SOURCES ***
+      ${localStateData ? `[x] STATE DATA (PRIORITY): PPE $${localStateData.ppe}, Poverty ${(localStateData.economicallyDisadvantaged*100).toFixed(0)}%, Proficiency ${localStateData.proficiency.composite}%` : '[ ] State Data Missing - Estimate based on typical district'}
+      ${externalApiData ? `[x] EXTERNAL API: ${JSON.stringify(externalApiData).substring(0, 1000)}` : ''}
+
+      INSTRUCTIONS:
+      1. Deficit: ${localStateData ? "Use PPE * Enrollment to calc Budget. Assume 1-3% structural deficit." : "Estimate based on recent news/inflation."}
+      2. Trust: ${localStateData ? `Start with baseline derived from Proficiency (${localStateData.proficiency.composite}%). Low scores = Lower Trust.` : "Search news."}
+      3. Archetype: 'urban'|'suburban'|'rural'.
+
+      RETURN JSON:
+      {
+        "archetype": "urban"|"suburban"|"rural",
+        "title": "String",
+        "description": "String",
+        "initialState": {
+             "year": 2025,
+             "enrollment": number, 
+             "revenue": { "local": number, "state": number, "federalOneTime": number },
+             "expenditures": { "personnel": number, "operations": number, "fixed": number },
+             "fundBalance": number,
+             "structuralGap": number,
+             "communityTrust": number
+        }
+      }
+    `;
+
+    try {
+        // UPDATED: Using Gemini 3 Pro + Thinking
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-pro-preview',
+            config: { 
+                tools: [{ googleSearch: {} }],
+                thinkingConfig: { thinkingBudget: 32768 },
+                responseMimeType: 'application/json',
+                safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+                ]
+            },
+            contents: prompt
+        });
+
+        const text = response.text;
+        if (!text) throw new Error("No AI Response");
+        
+        const data = safeJsonParse(text);
+        if(!data) throw new Error("Invalid JSON from AI");
+
+        const validId = ['urban', 'suburban', 'rural'].includes(data.archetype) ? data.archetype : 'suburban';
+        
+        SCENARIOS[validId] = {
+            ...SCENARIOS[validId],
+            title: data.title,
+            description: data.description,
+            initialState: data.initialState,
+            initialSchools: schools.length > 0 ? schools : SCENARIOS[validId].initialSchools
+        };
+
+        setBaseGameState(data.initialState);
+        setScenarioId(validId); 
+        
+    } catch (e) {
+        console.error("Briefing Gen Error", e);
+        setScenarioId('suburban');
+        setBaseGameState(SCENARIOS['suburban'].initialState);
+    } finally {
+        setIsGeneratingBriefing(false);
+    }
+  };
+
+  // Phase 2: Simulation
+  const generateSimulationData = async () => {
+    if (!scenarioId || !districtContext) return;
+    
+    // If we already have schools from Phase 1 (Harmonized API), skip expensive AI gen
+    if (schools.length > 0) {
+        const gap = baseGameState?.structuralGap || 0;
+        const newCards = generateProposals(scenarioId, gap, new Set());
+        setDecisions(newCards);
+        setHistory([newCards]);
+        setHistoryIndex(0);
+        setGameState(baseGameState);
+        setSimGenerationComplete(true);
+        return;
+    }
+    
+    setIsGeneratingSim(true);
+    // NOTE: This runs in background usually
+
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    try {
+        const prompt = `
+          CRITICAL: Data API. Output JSON only.
+          Context: ${districtContext.name}, ${districtContext.state}.
+          
+          TASK: RETRIEVE OFFICIAL SCHOOL ROSTER.
+          1. List EVERY SINGLE SCHOOL in this district.
+          2. **DO NOT TRUNCATE**.
+          
+          ${stateData ? `
+          *** MANDATORY STATE DATA ALIGNMENT ***
+          - Average Spending Per Pupil must be close to: $${stateData.ppe}
+          - Average Proficiency (Math/ELA) must be close to: ${stateData.proficiency.composite}%
+          - Average Poverty Rate must be close to: ${(stateData.economicallyDisadvantaged * 100).toFixed(0)}%
+          ` : ''}
+          
+          RETURN JSON:
+          {
+            "initialSchools": [
+                { "id": "s1", "name": "String", "type": "High"|"Middle"|"Elementary", "enrollment": number, "spendingPerPupil": number, "academicOutcome": { "math": number, "ela": number }, "povertyRate": number, "principal": "String", "staffing": { "senior": number, "junior": number } }
+            ]
+          }
+        `;
+
+        // UPDATED: Using Gemini 3 Pro + Thinking
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-pro-preview',
+            config: { 
+                tools: [{ googleSearch: {} }],
+                thinkingConfig: { thinkingBudget: 32768 },
+                responseMimeType: 'application/json', 
+                safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+                ]
+            },
+            contents: prompt
+        });
+
+        let text = response.text;
+        if(!text) throw new Error("Empty AI Response");
+        
+        let data = safeJsonParse(text);
+        if (!data) throw new Error("Invalid JSON");
+
+        // Merge Strategy: Use Harmonized External Data if available, else AI data
+        let finalSchools = data.initialSchools;
+
+        if (!finalSchools || !Array.isArray(finalSchools) || finalSchools.length === 0) {
+             throw new Error("No schools returned");
+        }
+
+        const gap = baseGameState?.structuralGap || 0;
+        const newCards = generateProposals(scenarioId, gap, new Set());
+
+        setSchools(finalSchools);
+        setDecisions(newCards);
+        setHistory([newCards]);
+        setHistoryIndex(0);
+        
+        // Final State Reconciliation
+        if (stateData && baseGameState) {
+             const realTotalBudget = stateData.ppe * stateData.enrollment;
+             const updatedState = {
+                ...baseGameState,
+                enrollment: stateData.enrollment,
+                revenue: {
+                    local: realTotalBudget * 0.45,
+                    state: realTotalBudget * 0.45, 
+                    federalOneTime: realTotalBudget * 0.10
+                },
+                expenditures: {
+                    personnel: realTotalBudget * 0.85,
+                    operations: realTotalBudget * 0.10,
+                    fixed: realTotalBudget * 0.05
+                },
+                structuralGap: baseGameState.structuralGap
+            };
+            setBaseGameState(updatedState);
+            setGameState(updatedState);
+        } else {
+            setGameState(baseGameState);
+        }
+
+        setSimGenerationComplete(true);
+
+    } catch (e) {
+        console.error("Sim Gen Failed", e);
+        setSchools(SCENARIOS[scenarioId].initialSchools); 
+        setDecisions(generateProposals(scenarioId, -1000000, new Set()));
+        setGameState(baseGameState);
+        setSimGenerationComplete(true);
+    } finally {
+        setIsGeneratingSim(false);
+    }
+  };
+
+  const handleAcceptAssignment = () => {
+      setStarted(true);
+  };
+
+  // --- Helper Functions ---
+  const generateProposals = (scenarioId: string, structuralGap: number, fundedIds: Set<string>): Card[] => {
+    const TARGET_COUNT = 8;
+    let eligibleCards = CARD_POOL.filter(card => 
+        card.validScenarios.includes('all') || card.validScenarios.includes(scenarioId as any)
+    ).filter(card => !card.unique || !fundedIds.has(card.id));
+
+    const isDeficitCrisis = structuralGap < -1000000;
+    let finalSelection: PoolCard[] = [];
+    const savingsCards = eligibleCards.filter(c => c.cost < 0);
+    
+    if (isDeficitCrisis) {
+        finalSelection.push(...[...savingsCards].sort(() => Math.random() - 0.5).slice(0, 3));
+    } else {
+        finalSelection.push(...[...savingsCards].sort(() => Math.random() - 0.5).slice(0, 1));
+    }
+
+    const remainingPool = eligibleCards.filter(c => !finalSelection.find(f => f.id === c.id));
+    finalSelection.push(...[...remainingPool].sort(() => Math.random() - 0.5).slice(0, TARGET_COUNT - finalSelection.length));
+
+    return finalSelection.map(c => ({ ...c, selected: 'None' as SelectionState })).sort(() => Math.random() - 0.5);
   };
 
   const handleMoveCard = (id: string, dest: SelectionState) => {
     const newDecisions = decisions.map(c => c.id === id ? { ...c, selected: dest } : c);
-    updateDecisions(newDecisions);
+    setHistory(prev => [...prev.slice(0, historyIndex + 1), newDecisions]);
+    setHistoryIndex(prev => prev + 1);
+    setDecisions(newDecisions);
   };
 
   const handleAddProposal = (newCard: Card) => {
-    const newDecisions = [...decisions, newCard];
-    updateDecisions(newDecisions);
+      const newDecisions = [newCard, ...decisions];
+      setHistory(prev => [...prev.slice(0, historyIndex + 1), newDecisions]);
+      setHistoryIndex(prev => prev + 1);
+      setDecisions(newDecisions);
   };
 
   const handleUndo = () => {
     if (historyIndex > 0) {
-      const newIndex = historyIndex - 1;
-      setHistoryIndex(newIndex);
-      setDecisions(history[newIndex]);
+      setDecisions(history[historyIndex - 1]);
+      setHistoryIndex(prev => prev - 1);
     }
   };
 
   const handleRedo = () => {
     if (historyIndex < history.length - 1) {
-      const newIndex = historyIndex + 1;
-      setHistoryIndex(newIndex);
-      setDecisions(history[newIndex]);
-    }
-  };
-
-  const handleChatSubmit = async () => {
-    if (!chatInput.trim() || !gameState || !scenarioId) return;
-    
-    setIsChatting(true);
-    const userMessage = chatInput.trim();
-    
-    // Optimistically update UI
-    const newHistory = [...chatHistory, { role: 'user' as const, text: userMessage }];
-    setChatHistory(newHistory);
-    setChatInput('');
-
-    const scenario = SCENARIOS[scenarioId];
-    const activeProposals = decisions.filter(d => d.selected !== 'None');
-
-    const prompt = `
-      You are the School Board for a ${scenario.title} school district.
-      
-      Context:
-      - We just voted on the Superintendent's budget.
-      - Result: ${boardFeedback?.voteCount} (${boardFeedback?.approved ? 'Approved' : 'Rejected'}).
-      - Board's Initial Feedback: "${boardFeedback?.feedback}"
-      
-      Financial Snapshot:
-      - Structural Deficit: $${gameState.structuralGap.toLocaleString()}
-      - Trust: ${gameState.communityTrust}/100
-      
-      The Budget Proposal in question:
-      ${activeProposals.map(d => 
-        `- ${d.selected === 'Reject' ? 'REJECTED/CUT' : `FUNDED via ${d.selected}`}: ${d.title}`
-      ).join('\n')}
-      
-      User Question: "${userMessage}"
-      
-      Task: Respond conversationally as the School Board. 
-      - Be professional but firm.
-      - If the user asks for advice, explain WHY specific choices (like cutting popular programs or failing to balance the deficit) caused the vote result.
-      - Keep response concise (2-3 sentences).
-    `;
-
-    try {
-       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt
-       });
-       
-       const text = response.text || "The Board has no further comment.";
-       setChatHistory([...newHistory, { role: 'model', text: text }]);
-    } catch (e) {
-        console.error("Chat failed", e);
-        setChatHistory([...newHistory, { role: 'model', text: "Board members are currently unavailable for comment." }]);
-    } finally {
-        setIsChatting(false);
+      setDecisions(history[historyIndex + 1]);
+      setHistoryIndex(prev => prev + 1);
     }
   };
 
   const handleSubmit = async (narrative: string) => {
     setIsSubmitting(true);
     setFinalNarrative(narrative);
-    setChatHistory([]); 
     
     if (!gameState || !scenarioId) return;
 
-    const scenario = SCENARIOS[scenarioId];
     const activeProposals = decisions.filter(d => d.selected !== 'None');
-
     const prompt = `
-      You are the School Board for a ${scenario.title} school district.
+      You are the School Board.
+      District: ${districtContext?.name}
+      Deficit: $${gameState.structuralGap}
       
-      Context: ${scenario.description}
+      Proposals:
+      ${activeProposals.map(d => `- ${d.selected === 'Reject' ? 'CUT' : `FUNDED (${d.selected})`}: ${d.title} ($${d.cost})`).join('\n')}
       
-      Current Financial State:
-      - Structural Deficit: $${gameState.structuralGap.toLocaleString()} (Positive is surplus, Negative is deficit)
-      - Projected Fund Balance: $${gameState.fundBalance.toLocaleString()}
-      - Community Trust: ${gameState.communityTrust}/100
+      Narrative: "${narrative}"
       
-      The Superintendent has proposed the following:
-      ${activeProposals.map(d => 
-        `- ${d.selected === 'Reject' ? 'REJECTED/CUT' : `FUNDED via ${d.selected}`}: ${d.title} (Impact: $${d.cost.toLocaleString()}) [Risk: ${d.riskFactor}]`
-      ).join('\n')}
-      
-      Superintendent's Narrative to the Board:
-      "${narrative}"
-      
-      Your Task: Vote on this budget proposal.
-      
-      Guidelines for your vote:
-      1. If the Structural Deficit is significantly negative (worse than -$1M), you should likely REJECT it unless the narrative is incredibly persuasive or trust is very high.
-      2. If Community Trust is below 50, you are skeptical and looking for reasons to reject.
-      3. If 'Fiscal Cliff' moves (paying recurring costs with one-time money) are present, mention them as a concern.
-      4. If they cut popular programs (High Risk) without good justification, reject it.
-      5. If the budget is balanced and invests in students, approve it enthusiastically, but always explain your specific reasons in the feedback.
-      
-      CRITICAL: Return a raw JSON object (and nothing else). Do not use markdown code blocks.
-      Structure:
-      {
-        "approved": boolean,
-        "voteCount": string, // e.g. "7-0", "4-3", "2-5"
-        "feedback": string // Detailed paragraph (4-5 sentences) explaining the vote.
-      }
+      Vote on this budget.
+      RETURN JSON: { "approved": boolean, "voteCount": string, "feedback": string }
     `;
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        config: {
-          maxOutputTokens: 8192, 
-          safetySettings: [
-            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-          ],
-        },
-        contents: prompt 
-      });
-
-      let text = response.text;
-      
-      if (!text) {
-        throw new Error("AI returned empty response");
-      }
-
-      text = text.trim();
-      text = text.replace(/^```json\s*/g, '').replace(/^```\s*/g, '').replace(/\s*```$/g, '');
-      
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        text = jsonMatch[0];
-      }
-
-      let result;
-      try {
-        result = JSON.parse(text);
-      } catch (e) {
-         console.error("JSON Parse Error:", e, "Text:", text);
-         throw new Error("Failed to parse AI response as JSON");
-      }
-
-      setBoardFeedback(result);
-      setChatHistory([{ role: 'model', text: result.feedback }]);
-      setSimulationEnded(true);
-    } catch (error) {
-      console.error("AI Evaluation failed:", error);
-      const fallbackResult = {
-        approved: true,
-        voteCount: "Pass (Manual Override)",
-        feedback: "The AI Board Service was unavailable, so the budget passes by default. However, the State Auditor notes this is irregular."
-      };
-      setBoardFeedback(fallbackResult);
-      setChatHistory([{ role: 'model', text: fallbackResult.feedback }]);
-      setSimulationEnded(true);
+        // UPDATED: Using Gemini 3 Pro + Thinking
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const res = await ai.models.generateContent({
+            model: 'gemini-3-pro-preview',
+            config: { 
+                thinkingConfig: { thinkingBudget: 32768 },
+                responseMimeType: 'application/json',
+                safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+                ]
+            },
+            contents: prompt
+        });
+        const data = safeJsonParse(res.text!);
+        if(!data) throw new Error("Invalid JSON");
+        setBoardFeedback(data);
+        setSimulationEnded(true);
+    } catch (e) {
+        setBoardFeedback({ approved: true, voteCount: "Pass (Override)", feedback: "AI Unavailable." });
+        setSimulationEnded(true);
     } finally {
-      setIsSubmitting(false);
+        setIsSubmitting(false);
     }
   };
 
-  const handleRevise = () => {
-    setSimulationEnded(false);
-    setBoardFeedback(null);
-    setChatHistory([]);
-  };
-
-  const handleNextYear = async () => {
-    if (!gameState || !scenarioId) return;
-
-    setIsGeneratingSim(true); 
-
-    const newlyFundedUniqueIds = new Set<string>(fundedUniqueIds);
-    decisions.forEach(d => {
-        const poolCard = CARD_POOL.find(p => p.id === d.id);
-        if (poolCard && poolCard.unique && (d.selected === 'Fund' || d.selected === 'OneTime')) {
-            newlyFundedUniqueIds.add(d.id);
-        }
-    });
-    setFundedUniqueIds(newlyFundedUniqueIds);
-
-    const fiscalCliff = decisions
-      .filter(d => d.selected === 'OneTime' && d.isRecurring)
-      .reduce((acc, d) => acc + d.cost, 0);
-
-    const prevStructuralGap = gameState.structuralGap;
-    const inflation = 1500000;
-    const newStartGap = prevStructuralGap - fiscalCliff - inflation;
-
-    // In standard mode, scenarioId is the key (urban/suburban/rural)
-    const staticHand = generateProposals(scenarioId, newStartGap, newlyFundedUniqueIds);
-    
-    setBaseGameState({
-      ...gameState,
-      year: gameState.year + 1,
-      structuralGap: newStartGap,
-      revenue: {
-        ...gameState.revenue,
-        federalOneTime: 0 
-      },
-      expenditures: gameState.expenditures,
-      communityTrust: gameState.communityTrust
-    });
-
-    setDecisions(staticHand);
-    setHistory([staticHand]);
-    setHistoryIndex(0);
-    setSimulationEnded(false);
-    setBoardFeedback(null);
-    setChatHistory([]);
-    setOneTimeUsed(0);
-    
-    setIsGeneratingSim(false);
+  const handleChatSend = async (msg: string) => {
+    setIsChatTyping(true);
+    setChatHistory(p => [...p, { role: 'user', text: msg }]);
+    try {
+        // UPDATED: Using Gemini 3 Pro + Thinking
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const chat = ai.chats.create({ 
+            model: 'gemini-3-pro-preview', 
+            history: chatHistory.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
+            config: {
+                thinkingConfig: { thinkingBudget: 32768 },
+                safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+                ]
+            }
+        });
+        const res = await chat.sendMessage({ message: msg });
+        setChatHistory(p => [...p, { role: 'model', text: res.text || "..." }]);
+    } catch(e) {
+        setChatHistory(p => [...p, { role: 'model', text: "Connection error." }]);
+    } finally {
+        setIsChatTyping(false);
+    }
   };
 
   const handleRestart = () => {
-    setScenarioId(null);
-    setStarted(false);
-    setGameState(null);
-    setBaseGameState(null);
-    setSimulationEnded(false);
-    setBoardFeedback(null);
-    setChatHistory([]);
-    setDecisions([]);
-    setHistory([]);
-    setHistoryIndex(-1);
-    setOneTimeUsed(0);
-    setFundedUniqueIds(new Set<string>());
+      setDistrictContext(null);
+      setScenarioId(null);
+      setStarted(false);
+      setStateData(null);
+      setDataSources([]);
+      setDecisions([]);
+      setHistory([]);
+      setHistoryIndex(-1);
+      setSimulationEnded(false);
+      setBoardFeedback(null);
+      setSimGenerationComplete(false);
+      setLoadingLog([]); // Reset log
   };
 
-  // 1. Loading Screen (Phase 1: Briefing or Phase 2: Sim)
-  if (isGeneratingBriefing || isGeneratingSim) {
+  // --- 5. RENDER LOGIC (Conditional Returns) ---
+  
+  if (isGeneratingBriefing) {
       return (
         <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white relative overflow-hidden">
-            <div className="absolute inset-0 opacity-10">
-                <div className="absolute top-0 left-0 w-64 h-64 bg-white rounded-full blur-3xl transform -translate-x-1/2 -translate-y-1/2"></div>
-                <div className="absolute bottom-0 right-0 w-96 h-96 bg-blue-500 rounded-full blur-3xl transform translate-x-1/2 translate-y-1/2"></div>
-            </div>
-            
-            <a 
-                href="mailto:paul@education.associates?subject=Simulator Feedback" 
-                className="absolute top-6 right-6 z-50 flex items-center gap-2 text-blue-300 hover:text-white transition-colors text-xs font-medium"
-            >
-                <MessageSquare className="w-4 h-4" /> Feedback
-            </a>
-
             <div className="z-10 flex flex-col items-center max-w-2xl w-full text-center">
-                <div className="relative mb-8">
-                    <div className="absolute inset-0 bg-blue-500 rounded-full blur-xl opacity-50 animate-pulse"></div>
-                    <BrainCircuit className="w-20 h-20 text-blue-300 relative z-10" />
-                </div>
-
-                <h2 className="text-3xl font-bold mb-2 tracking-tight">
-                    {isGeneratingBriefing ? "Analyzing Public Records..." : "Researching School Data..."}
-                </h2>
-                <p className="text-blue-200 mb-4">
-                    {loadingMessage}
-                </p>
-
-                <div className="w-full max-w-md h-1 bg-indigo-800 rounded-full overflow-hidden mb-8">
-                    <div className="h-full bg-blue-400 animate-progress"></div>
-                </div>
+                <Loader2 className="w-16 h-16 text-blue-300 animate-spin mb-6" />
+                <h2 className="text-2xl font-bold mb-2">Forensic Analysis...</h2>
                 
-                <div className="bg-indigo-800/50 border border-indigo-700 p-6 rounded-xl max-w-lg w-full animate-in slide-in-from-bottom-4 fade-in duration-700">
+                {/* Live Action Log */}
+                <div className="bg-indigo-950/50 rounded-lg p-4 font-mono text-xs text-left w-full h-[120px] overflow-y-auto mb-6 border border-indigo-800 shadow-inner">
+                    {loadingLog.map((log, i) => (
+                        <div key={i} className="text-blue-300 mb-1 last:text-white last:font-bold last:animate-pulse">
+                            {log}
+                        </div>
+                    ))}
+                </div>
+
+                <div className="bg-indigo-800/50 border border-indigo-700 p-6 rounded-xl max-w-lg w-full">
                     <div className="flex items-center justify-center gap-2 mb-3 text-blue-300 text-xs font-bold uppercase tracking-widest">
                         <Info className="w-4 h-4" /> Did you know?
                     </div>
-                    <p key={loadingFact} className="text-lg font-serif leading-relaxed animate-in fade-in slide-in-from-bottom-2 duration-500">
-                        "{loadingFact}"
-                    </p>
-                </div>
-
-                <div className="mt-8 font-mono text-xs text-indigo-400">
-                    Launch in T-{loadingSeconds}s
+                    <p key={loadingFact} className="text-lg font-serif leading-relaxed animate-in fade-in duration-500">"{loadingFact}"</p>
                 </div>
             </div>
-            
-            <style>{`
-                @keyframes progress {
-                    0% { width: 0% }
-                    100% { width: 100% }
-                }
-                .animate-progress {
-                    animation: progress ${isGeneratingBriefing ? '6s' : '12s'} linear forwards;
-                }
-            `}</style>
         </div>
       );
   }
 
-  // 2. District Selection (Main Entry)
+  if (started && !simGenerationComplete) {
+      return (
+        <div className="min-h-screen bg-indigo-900 flex flex-col items-center justify-center p-6 text-white relative overflow-hidden">
+            <div className="z-10 flex flex-col items-center max-w-2xl w-full text-center">
+                <Loader2 className="w-16 h-16 text-blue-300 animate-spin mb-6" />
+                <h2 className="text-2xl font-bold mb-2">Building Simulation...</h2>
+                <p className="text-blue-200 mb-8">Processing School Rosters & Financials...</p>
+            </div>
+        </div>
+      );
+  }
+
   if (!scenarioId) {
       return (
           <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 relative overflow-hidden">
              <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-900 via-orange-400 to-indigo-900"></div>
-             <div className="w-full max-w-3xl z-10">
+             <div className="w-full max-w-3xl z-50">
                 <DistrictSelector onSelect={handleDistrictSelect} />
              </div>
-             
-             <div className="mt-12 py-6 text-center z-10 flex flex-col items-center justify-center">
-                 <div className="flex items-center gap-2 mb-2 text-slate-400 opacity-70">
-                     <span className="text-xs">Simulator by</span>
-                     <Logo className="h-6" />
-                 </div>
+             <div className="mt-12 flex items-center gap-2 text-slate-400 opacity-70">
+                 <span className="text-xs">Simulator by</span>
+                 <Logo className="h-6" />
              </div>
           </div>
-      )
+      );
   }
 
-  // 3. Onboarding Modal
-  if (!started && scenarioId) {
-    return <OnboardingModal 
-        scenario={SCENARIOS[scenarioId]} 
-        onStart={handleAcceptAssignment} 
-        onBack={() => setScenarioId(null)}
-    />;
+  if (!started) {
+      return (
+        <>
+            <OnboardingModal 
+                scenario={SCENARIOS[scenarioId]} 
+                onStart={handleAcceptAssignment} 
+                onBack={() => setScenarioId(null)} 
+            />
+            <ChatOverlay 
+                isOpen={isChatOpen} 
+                onToggle={() => setIsChatOpen(!isChatOpen)} 
+                history={chatHistory} 
+                onSend={handleChatSend} 
+                isTyping={isChatTyping} 
+                contextLabel="Briefing Advisor"
+            />
+        </>
+      );
   }
 
-  // 4. Main Loading State (Fallback)
-  if (!gameState) return <div>Loading...</div>;
-
-  const oneTimeRemaining = gameState.revenue.federalOneTime - oneTimeUsed;
-  const allProposalsSorted = decisions.every(d => d.selected !== 'None');
-
-  // 5. Simulation Result (Board Vote)
-  if (simulationEnded && boardFeedback) {
-    const isApproved = boardFeedback.approved;
-    
-    return (
-      <div className={`min-h-screen ${isApproved ? 'bg-emerald-50' : 'bg-orange-50'} p-0 flex flex-col`}>
-         <header className="bg-white text-slate-900 p-4 shadow-sm z-40 border-b border-slate-200">
-            <div className="max-w-2xl mx-auto flex justify-between items-center w-full">
-              <div className="flex items-center gap-4">
-                <Logo className="h-8" />
-              </div>
-              <div className="flex gap-4">
-                <button 
-                  onClick={handleRestart}
-                  className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 transition-colors text-xs font-medium"
-                >
-                    <RotateCcw className="w-4 h-4" /> Start Over
-                </button>
-                <a 
-                    href="mailto:paul@education.associates?subject=Simulator Feedback" 
-                    className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 transition-colors text-xs font-medium"
-                >
-                    <MessageSquare className="w-4 h-4" /> Feedback
-                </a>
-              </div>
-            </div>
-        </header>
-
-        <div className="flex-1 flex items-center justify-center p-8">
-            <div className="bg-white max-w-2xl w-full p-8 rounded-2xl shadow-xl text-center border-t-8 border-t-indigo-900">
-            <div className="mb-6 flex justify-center">
-                {isApproved ? (
-                <CheckCircle className="w-20 h-20 text-emerald-500" />
-                ) : (
-                <XCircle className="w-20 h-20 text-orange-500" />
-                )}
-            </div>
-            
-            <h2 className="text-3xl font-bold text-indigo-900 mb-2">
-                {isApproved ? 'Budget Adopted' : 'Budget Rejected'}
-            </h2>
-            <p className="text-xl font-mono text-slate-500 mb-6 font-bold">Vote Count: {boardFeedback.voteCount}</p>
-            
-            <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 text-left mb-8 shadow-inner">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Board Feedback</h4>
-                <p className="text-slate-700 leading-relaxed italic">
-                "{boardFeedback.feedback}"
-                </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-6 text-left mb-8">
-                <div className="bg-white p-4 rounded border border-slate-100 shadow-sm">
-                <p className="text-xs text-slate-400 uppercase font-bold">Final Structural Balance</p>
-                <p className={`text-2xl font-bold ${gameState.structuralGap >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {gameState.structuralGap < 0 ? '-' : '+'}${Math.abs(gameState.structuralGap).toLocaleString()}
-                </p>
-                </div>
-                <div className="bg-white p-4 rounded border border-slate-100 shadow-sm">
-                <p className="text-xs text-slate-400 uppercase font-bold">Community Trust</p>
-                <p className="text-2xl font-bold text-indigo-600">{gameState.communityTrust}%</p>
-                </div>
-            </div>
-
-            {/* Chat Interface */}
-            <div className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden flex flex-col h-[400px] mb-8 shadow-inner">
-                <div className="bg-slate-100 p-3 border-b border-slate-200 flex items-center gap-2">
-                    <Users className="w-4 h-4 text-indigo-900" />
-                    <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Boardroom Discussion</span>
-                </div>
-                
-                <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-                    {chatHistory.map((msg, idx) => (
-                        <div key={idx} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${msg.role === 'user' ? 'bg-indigo-100 text-indigo-600' : 'bg-white border border-slate-200 text-slate-600'}`}>
-                                {msg.role === 'user' ? <User className="w-4 h-4" /> : <Users className="w-4 h-4" />}
-                            </div>
-                            <div className={`p-3 rounded-lg text-sm max-w-[80%] ${msg.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-700'}`}>
-                                {msg.text}
-                            </div>
+  // Simulation (Started & Ready)
+  if (gameState) {
+      return (
+        <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900 pb-20">
+            <header className="bg-white text-slate-900 p-4 shadow-sm sticky top-0 z-40 border-b border-slate-200">
+                <div className="max-w-7xl mx-auto flex justify-between items-center">
+                    <div className="flex items-center gap-4">
+                        <Logo className="h-8" />
+                        <div className="hidden md:block w-px h-6 bg-slate-200"></div>
+                        <div className="hidden md:block text-xs font-bold text-slate-400 uppercase tracking-widest">
+                            {districtContext?.name}
                         </div>
-                    ))}
-                     {isChatting && (
-                        <div className="flex gap-3">
-                             <div className="w-8 h-8 rounded-full bg-white border border-slate-200 text-slate-600 flex items-center justify-center flex-shrink-0">
-                                <Users className="w-4 h-4" />
-                             </div>
-                             <div className="bg-white border border-slate-200 p-3 rounded-lg">
-                                <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                             </div>
-                        </div>
-                    )}
-                    <div ref={chatEndRef} />
-                </div>
-
-                <div className="p-3 bg-white border-t border-slate-200 flex gap-2">
-                    <input 
-                        type="text" 
-                        value={chatInput}
-                        onChange={(e) => setChatInput(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleChatSubmit()}
-                        placeholder="Ask the Board for advice or clarification..."
-                        className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        disabled={isChatting}
-                    />
-                    <button 
-                        onClick={handleChatSubmit}
-                        disabled={!chatInput.trim() || isChatting}
-                        className="bg-indigo-900 text-white p-2 rounded-lg hover:bg-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                        <Send className="w-4 h-4" />
-                    </button>
-                </div>
-            </div>
-
-            <div className="flex gap-4 justify-center">
-                {!isApproved && (
-                <button onClick={handleRevise} className="bg-white border-2 border-slate-200 text-slate-700 px-6 py-3 rounded-lg hover:border-orange-500 hover:text-orange-600 font-bold transition-colors flex items-center gap-2">
-                    <RefreshCcw className="w-4 h-4" /> Revise Proposal
-                </button>
-                )}
-                {isApproved ? (
-                    <button onClick={handleNextYear} className="bg-indigo-900 text-white px-6 py-3 rounded-lg hover:bg-indigo-800 font-bold shadow-lg hover:shadow-xl transition-all flex items-center gap-2">
-                        Advance to Year {gameState.year + 1} <ArrowRight className="w-4 h-4" />
-                    </button>
-                ) : (
-                    <button onClick={handleRestart} className="bg-slate-800 text-white px-6 py-3 rounded-lg hover:bg-slate-700 font-bold shadow-lg transition-all flex items-center gap-2">
-                    Give Up / Restart
-                    </button>
-                )}
-            </div>
-            </div>
-        </div>
-
-        <footer className="py-6 text-center border-t border-emerald-100/50 flex flex-col items-center justify-center">
-            <div className="flex items-center gap-2 mb-2 text-slate-400 opacity-70">
-                <span className="text-xs">Simulator by</span>
-                <Logo className="h-6" />
-            </div>
-        </footer>
-      </div>
-    );
-  }
-
-  // 6. Simulation Dashboard
-  return (
-    <div className="min-h-screen bg-slate-100 text-slate-900 font-sans pb-20">
-      <header className="bg-white text-slate-900 p-4 shadow-sm sticky top-0 z-40 border-b border-slate-200">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <Logo className="h-10" />
-            <div className="hidden md:block h-8 w-px bg-slate-300 mx-2"></div>
-            <div className="hidden md:block">
-              <h1 className="font-bold text-sm leading-tight text-slate-500 uppercase tracking-widest">School District Budget Simulator</h1>
-              <p className="text-xs text-indigo-600 font-bold">{SCENARIOS[scenarioId].title} • Year {gameState.year}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-6">
-             <button 
-                onClick={handleRestart}
-                className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 transition-colors text-xs font-medium"
-             >
-                <RotateCcw className="w-4 h-4" /> Start Over
-             </button>
-             <a 
-                href="mailto:paul@education.associates?subject=Simulator Feedback" 
-                className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 transition-colors text-xs font-medium"
-            >
-                <MessageSquare className="w-4 h-4" /> Feedback
-            </a>
-            {!isCompact && (
-                <div className="hidden md:block text-right border-l border-slate-200 pl-6">
-                    <div className="text-xs text-slate-400 uppercase tracking-wider font-bold">Est. Fund Balance</div>
-                    <div className={`font-mono font-bold text-xl ${gameState.fundBalance < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                    ${gameState.fundBalance.toLocaleString()}
+                    </div>
+                    <div className="flex gap-4">
+                        <button onClick={handleRestart} className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 text-xs font-medium">
+                            <RotateCcw className="w-4 h-4" /> Restart
+                        </button>
                     </div>
                 </div>
-            )}
-          </div>
-        </div>
-      </header>
+            </header>
 
-      <main className="max-w-6xl mx-auto p-4 mt-0">
-        {/* Sticky Cockpit */}
-        <div className={`sticky top-[73px] z-30 bg-slate-100/90 backdrop-blur-sm transition-all duration-300 border-b border-slate-200/50 ${isCompact ? 'py-2 shadow-md' : 'pt-4 pb-2 -mx-4 px-4 mb-4 shadow-sm'}`}>
-            <div className={isCompact ? 'max-w-6xl mx-auto' : ''}>
-               <Cockpit state={gameState} schools={derivedSchools} compact={isCompact} />
-            </div>
-        </div>
+            <main className="flex-1 max-w-7xl mx-auto w-full p-4 md:p-6 space-y-6">
+                <div className={`sticky top-[73px] z-30 bg-slate-100/90 backdrop-blur-sm transition-all duration-300 border-b border-slate-200/50 ${isCompact ? 'py-2 shadow-md' : 'pt-4 pb-2 -mx-4 px-4 mb-4 shadow-sm'}`}>
+                    <div className={isCompact ? 'max-w-6xl mx-auto' : ''}>
+                        <Cockpit state={gameState} schools={derivedSchools} compact={isCompact} />
+                    </div>
+                </div>
 
-        <div className="space-y-8">
-          <Scatterplot schools={derivedSchools} />
-          <TheGrid 
-              cards={decisions} 
-              onMoveCard={handleMoveCard} 
-              fundOneTimeRemaining={oneTimeRemaining}
-              onUndo={handleUndo}
-              onRedo={handleRedo}
-              canUndo={historyIndex > 0}
-              canRedo={historyIndex < history.length - 1}
-              onAddProposal={handleAddProposal}
-          />
-          <NarrativeBuilder 
-              decisions={decisions} 
-              onSubmit={handleSubmit} 
-              isSubmitting={isSubmitting} 
-              allSorted={allProposalsSorted}
-          />
-        </div>
-      </main>
+                {simulationEnded && boardFeedback ? (
+                    <div className="bg-white p-8 rounded-2xl shadow-xl text-center max-w-2xl mx-auto border-t-8 border-indigo-900">
+                        <div className="mb-4 text-6xl">{boardFeedback.approved ? '🎉' : '❌'}</div>
+                        <h2 className="text-3xl font-bold text-indigo-900 mb-2">{boardFeedback.approved ? 'Budget Adopted' : 'Budget Rejected'}</h2>
+                        <p className="text-slate-500 mb-6 font-mono font-bold">Vote: {boardFeedback.voteCount}</p>
+                        <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 text-left italic text-slate-700 mb-8">"{boardFeedback.feedback}"</div>
+                        <button onClick={handleRestart} className="bg-slate-800 text-white px-6 py-3 rounded-lg hover:bg-slate-700">Start Over</button>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-2 space-y-6">
+                            <TheGrid 
+                                cards={decisions} 
+                                onMoveCard={handleMoveCard} 
+                                fundOneTimeRemaining={gameState.revenue.federalOneTime - oneTimeUsed}
+                                onUndo={handleUndo}
+                                onRedo={handleRedo}
+                                canUndo={historyIndex > 0}
+                                canRedo={historyIndex < history.length - 1}
+                                onAddProposal={handleAddProposal}
+                            />
+                        </div>
+                        <div className="space-y-6">
+                            <Scatterplot schools={derivedSchools} />
+                            <NarrativeBuilder 
+                                decisions={decisions} 
+                                onSubmit={handleSubmit} 
+                                isSubmitting={isSubmitting}
+                                allSorted={decisions.every(c => c.selected !== 'None')}
+                            />
+                        </div>
+                    </div>
+                )}
+            </main>
 
-      <footer className="max-w-6xl mx-auto py-6 text-center flex flex-col items-center justify-center">
-          <div className="flex items-center gap-2 mb-2 text-slate-400 opacity-70">
-            <span className="text-xs">Simulator by</span>
-            <Logo className="h-6" />
+            <footer className="max-w-6xl mx-auto py-6 text-center">
+                <div className="flex flex-col items-center justify-center gap-2 mb-2 text-slate-400 opacity-70">
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs">Simulator by</span>
+                        <Logo className="h-6" />
+                    </div>
+                    {dataSources.length > 0 && (
+                        <p className="text-[10px] text-slate-400 flex flex-wrap justify-center gap-2 mt-2">
+                            <span className="flex items-center gap-1 font-bold"><Info className="w-3 h-3" /> Sources:</span> 
+                            {dataSources.join(" • ")}
+                        </p>
+                    )}
+                </div>
+            </footer>
+
+            <ChatOverlay 
+                isOpen={isChatOpen} 
+                onToggle={() => setIsChatOpen(!isChatOpen)} 
+                history={chatHistory} 
+                onSend={handleChatSend} 
+                isTyping={isChatTyping} 
+            />
         </div>
-        {censusSource && (
-            <p className="text-[10px] text-slate-400 mt-2 flex items-center gap-1">
-                <Info className="w-3 h-3" /> Financial Data Sourced from: {censusSource}
-            </p>
-        )}
-      </footer>
-    </div>
-  );
-}
+      );
+  }
+
+  // Fallback return if something goes wrong
+  return null;
+};
 
 export default App;

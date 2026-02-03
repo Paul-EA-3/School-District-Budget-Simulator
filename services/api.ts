@@ -1,81 +1,191 @@
 
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
+
 export interface FinancialState {
   revenue: number;
   expenditure: number;
   salaries: number;
   federalRevenue: number;
+  enrollment?: number; 
+  source: string[];
+}
+
+export interface StateFiscalData {
+  ppe: number;
+  proficiency: { math: number; ela: number; composite: number };
+  economicallyDisadvantaged: number;
+  enrollment: number;
   source: string;
 }
 
+export interface StateApiDiscovery {
+  state_abbreviation: string;
+  finance_api_url: string;
+  assessment_api_url: string;
+  source_authority: string;
+}
+
 /**
- * Fetches district finance data from the US Census Bureau (F-33 Survey).
- * Endpoint: https://api.census.gov/data/2021/school/finance
- * 
- * @param ncesId - The 7-digit NCES District ID (2-digit State FIPS + 5-digit LEA ID)
- * @returns FinancialState object or null
+ * Entry point for API discovery.
+ * Uses Gemini 3 Pro (Thinking) to intelligently find specific State API endpoints.
  */
-export const fetchCensusFinance = async (ncesId: string): Promise<FinancialState | null> => {
+export const find_state_api = async (state_abbreviation: string): Promise<StateApiDiscovery | null> => {
   try {
-    // NCES ID is 7 digits: First 2 are State FIPS, Last 5 are LEA ID
-    if (!ncesId || ncesId.length < 7) return null;
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
-    const stateFips = ncesId.substring(0, 2);
-    const leaId = ncesId.substring(2);
-
-    // Variables: TCREV (Total Rev), TCURINST (Current Instructional Exp), Z33 (Salaries), U11 (Federal Rev)
-    const url = `https://api.census.gov/data/2021/school/finance?get=TCREV,TCURINST,Z33,U11&for=school%20district%20(elementary,%20secondary,%20or%20unified):${leaId}&in=state:${stateFips}`;
+    const prompt = `
+      For the state with the abbreviation ${state_abbreviation}, find the most direct public URL for:
+      1. District-Level Per-Pupil Expenditure (PPE) Data.
+      2. District-Level Academic Assessment Proficiency Rates (e.g., state test scores).
+      
+      If a direct API is unavailable, find the public URL for the raw data file (CSV, JSON, XML) hosted on the state's official website or the most relevant structured federal API (e.g., NCES, Census). Use {DISTRICT_ID} as a placeholder for the URL's query parameter where applicable.
+      
+      RETURN JSON ONLY with the following properties:
+      - state_abbreviation (string): The two-letter abbreviation of the state.
+      - finance_api_url (string): The most relevant public API/raw data URL for PPE or finance data.
+      - assessment_api_url (string): The most relevant public API/raw data URL for test/proficiency data.
+      - source_authority (string): The name of the agency or portal that hosts the data.
+    `;
     
-    const response = await fetch(url);
-    if (!response.ok) {
-      console.warn(`Census API Error: ${response.statusText}`);
-      return null;
-    }
+    const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-preview',
+        config: { 
+            tools: [{ googleSearch: {} }],
+            thinkingConfig: { thinkingBudget: 32768 },
+            safetySettings: [
+                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+            ]
+        },
+        contents: prompt
+    });
 
-    const data = await response.json();
-    // Census API returns [["TCREV", "TCURINST", ...], ["1000", "500", ...]]
-    if (!data || data.length < 2) return null;
-
-    const values = data[1];
+    const text = response.text;
+    if (!text) return null;
     
-    // Basic validation to ensure we don't return garbage (sometimes Census returns -1 or -2 for missing)
-    const revenue = parseInt(values[0]);
-    if (revenue <= 0) return null;
-
-    return {
-      revenue: revenue, 
-      expenditure: parseInt(values[1]),
-      salaries: parseInt(values[2]),
-      federalRevenue: parseInt(values[3]),
-      source: 'US Census Bureau (F-33 Survey, 2021)'
-    };
-  } catch (error) {
-    console.error("Failed to fetch Census data:", error);
+    const clean = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+    return JSON.parse(clean) as StateApiDiscovery;
+  } catch (e) {
+    console.warn("API Discovery Failed", e);
     return null;
   }
 };
 
 /**
- * Searches the Socrata Open Data Network for budget datasets.
- * Endpoint: http://api.us.socrata.com/api/catalog/v1
+ * Fetches high-precision state-level data using AI as a live web scraper.
+ * Queries State Department of Education data via Google Search using Thinking Mode.
  */
+export const fetchStateLevelData = async (state: string, districtName: string): Promise<StateFiscalData | null> => {
+    try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        
+        // Construct a targeted search query for official state data
+        const prompt = `
+          ACT AS A DATA SCRAPER. 
+          Task: Find official State Department of Education data for: "${districtName}" in ${state}.
+          
+          MANDATE: Perform a Google Search for these exact terms:
+          1. "${districtName} ${state} school district report card 2024 per pupil expenditure"
+          2. "${districtName} ${state} assessment proficiency rates math ela 2024"
+          3. "${districtName} ${state} student demographics poverty rate"
+
+          EXTRACT these EXACT values from the search snippets/results:
+          - Per-Pupil Expenditure (PPE): Look for "Per Pupil Spending", "Current Expenditures per Student".
+          - Proficiency: Math % and ELA % (e.g. MCAP, STAAR, CAASPP scores).
+          - Poverty: % Economically Disadvantaged or Free/Reduced Lunch.
+          - Enrollment: Total students.
+
+          RETURN JSON ONLY:
+          {
+            "ppe": number (e.g. 15400),
+            "proficiency": { "math": number (0-100), "ela": number (0-100), "composite": number },
+            "economicallyDisadvantaged": number (decimal 0.0-1.0, e.g. 0.45 for 45%),
+            "enrollment": number,
+            "source": "String (e.g. 'Maryland State Dept of Education Report Card')"
+          }
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-pro-preview',
+            config: { 
+                tools: [{ googleSearch: {} }],
+                thinkingConfig: { thinkingBudget: 32768 },
+                responseMimeType: 'application/json',
+                safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+                ]
+            },
+            contents: prompt
+        });
+
+        const text = response.text;
+        if (!text) return null;
+
+        const cleanJson = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+        const data = JSON.parse(cleanJson);
+
+        // Basic Validation
+        if (!data.ppe || !data.proficiency) return null;
+
+        return data as StateFiscalData;
+
+    } catch (error) {
+        console.warn("State Data AI Fetch Failed:", error);
+        return null;
+    }
+};
+
+export const fetchUSAspending = async (districtName: string): Promise<{amount: number, source: string} | null> => {
+    try {
+        const url = `https://api.usaspending.gov/api/v2/references/keyword_search/?keyword=${encodeURIComponent(districtName)}&limit=5`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) return null;
+        
+        const data = await response.json();
+        const recipient = data.results?.find((r: any) => 
+            r.name.toLowerCase().includes(districtName.toLowerCase()) && 
+            r.destination === "recipient"
+        );
+
+        if (recipient) {
+            return {
+                amount: 0, 
+                source: `USAspending.gov (Recipient: ${recipient.name})`
+            };
+        }
+        return null;
+    } catch (error) {
+        return null;
+    }
+}
+
 export const fetchSocrataBudget = async (state: string, districtName: string): Promise<string | null> => {
   try {
-    // Attempt to find a matching domain for the state (e.g., data.ny.gov)
-    // This is a heuristic; broad search is safer.
     const query = `${districtName} school budget`;
     const url = `https://api.us.socrata.com/api/catalog/v1?q=${encodeURIComponent(query)}&limit=1`;
 
-    const response = await fetch(url);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
     if (!response.ok) return null;
 
     const data = await response.json();
     if (data.results && data.results.length > 0) {
-      // Return the link to the dataset
       return data.results[0].link;
     }
     return null;
   } catch (error) {
-    console.error("Failed to fetch Socrata data:", error);
     return null;
   }
 };
