@@ -35,19 +35,35 @@ If you plan to add a Node.js backend or want more control over the runtime envir
 **CRITICAL**: Do not commit your `.env` file to version control.
 
 ### For Firebase Hosting (CI/CD with GitHub Actions):
-1.  In your GitHub repository, go to **Settings > Secrets and variables > Actions**.
-2.  Add the following secrets:
-    *   `VITE_GEMINI_API_KEY`: Your Gemini API Key from [Google AI Studio](https://aistudio.google.com/).
-    *   `VITE_GOOGLE_MAPS_API_KEY`: Your Google Maps API Key from [GCP Console](https://console.cloud.google.com/).
-    *   `VITE_GA_TRACKING_ID`: Your Google Analytics ID.
-3.  Update your GitHub Actions workflow (`.github/workflows/firebase-hosting-merge.yml`) to include these environment variables during the build step:
-    ```yaml
-    - run: npm ci && npm run build
-      env:
-        VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
-        VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
-        VITE_GA_TRACKING_ID: ${{ secrets.VITE_GA_TRACKING_ID }}
-    ```
+
+GitHub Actions allows you to automate your deployment whenever you push code or open a Pull Request.
+
+#### 1. Configure GitHub Secrets
+In your GitHub repository, go to **Settings > Secrets and variables > Actions** and add:
+- `VITE_GEMINI_API_KEY`: Your Gemini API Key.
+- `VITE_GOOGLE_MAPS_API_KEY`: Your Google Maps API Key.
+- `VITE_GA_TRACKING_ID`: Your Google Analytics ID (e.g., `G-XXXXXX`).
+
+#### 2. PR Previews and Branch Deploys
+When you run `firebase init hosting`, Firebase creates two workflow files in `.github/workflows/`:
+
+- **Pull Request Previews (`firebase-hosting-pull-request.yml`)**:
+  - Automatically deploys a temporary "preview" version of your site when you open a PR.
+  - This allows you to review changes in a live environment before merging.
+- **Production Deploy (`firebase-hosting-merge.yml`)**:
+  - Automatically deploys to your live site when you merge a PR into your `main` branch.
+
+#### 3. Updating the Workflow for Environment Variables
+Vite requires environment variables to be present *at build time*. You must update these `.yml` files to include your secrets.
+
+**Example Build Step in `.github/workflows/firebase-hosting-merge.yml`:**
+```yaml
+      - run: npm ci && npm run build
+        env:
+          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+          VITE_GA_TRACKING_ID: ${{ secrets.VITE_GA_TRACKING_ID }}
+```
 
 ### For Cloud Run:
 You can set environment variables directly in the Cloud Run service configuration or use **Secret Manager** for higher security.
