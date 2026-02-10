@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { CheckCircle, XCircle, RefreshCcw, ArrowRight, MessageSquare, RotateCcw, Loader2, Info, BrainCircuit, Bot, Terminal } from 'lucide-react';
+import { CheckCircle, XCircle, RefreshCcw, ArrowRight, MessageSquare, RotateCcw, Loader2, Info, BrainCircuit, Bot, Terminal, LogOut } from 'lucide-react';
 import { SCENARIOS, CARD_POOL, EDUCATION_STATS, PoolCard } from './constants';
 import { GameState, School, Card, SelectionState, Scenario } from './types';
 import OnboardingModal from './components/OnboardingModal';
@@ -12,12 +12,16 @@ import DistrictSelector from './components/DistrictSelector';
 import ChatOverlay from './components/ChatOverlay';
 import LoadingScreen from './components/LoadingScreen';
 import SimulationResults from './components/SimulationResults';
+import Login from './components/Login';
 import { fetchUSAspending, fetchSocrataBudget, fetchStateLevelData, find_state_api, StateFiscalData, StateApiDiscovery } from './services/api';
 import { harmonize_api_data } from './services/harmonizer';
 import genAI, { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings } from './services/gemini';
 
 const App: React.FC = () => {
   // --- 1. STATE INITIALIZATION ---
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('is_authenticated') === 'true';
+  });
   const [districtContext, setDistrictContext] = useState<{name: string, location: string, state: string} | null>(null);
   const [scenarioId, setScenarioId] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
@@ -59,6 +63,10 @@ const App: React.FC = () => {
   const [isChatTyping, setIsChatTyping] = useState(false);
 
   // --- 2. EFFECT HOOKS ---
+
+  useEffect(() => {
+    localStorage.setItem('is_authenticated', isAuthenticated.toString());
+  }, [isAuthenticated]);
 
   useEffect(() => {
     const handleScroll = () => setIsCompact(window.scrollY > 50);
@@ -552,6 +560,10 @@ const App: React.FC = () => {
   };
 
   // --- 5. RENDER LOGIC (Conditional Returns) ---
+
+  if (!isAuthenticated) {
+    return <Login onLogin={() => setIsAuthenticated(true)} />;
+  }
   
   if (isGeneratingBriefing) {
       return (
@@ -580,9 +592,17 @@ const App: React.FC = () => {
              <div className="w-full max-w-3xl z-50">
                 <DistrictSelector onSelect={handleDistrictSelect} />
              </div>
-             <div className="mt-12 flex items-center gap-2 text-slate-400 opacity-70">
-                 <span className="text-xs">Simulator by</span>
-                 <Logo className="h-6" />
+             <div className="mt-12 flex flex-col items-center gap-4">
+                 <div className="flex items-center gap-2 text-slate-400 opacity-70">
+                     <span className="text-xs">Simulator by</span>
+                     <Logo className="h-6" />
+                 </div>
+                 <button
+                    onClick={() => setIsAuthenticated(false)}
+                    className="flex items-center gap-2 text-slate-400 hover:text-red-600 text-xs font-medium transition-colors"
+                 >
+                    <LogOut className="w-3 h-3" /> Logout
+                 </button>
              </div>
           </div>
       );
@@ -621,9 +641,12 @@ const App: React.FC = () => {
                             {districtContext?.name}
                         </div>
                     </div>
-                    <div className="flex gap-4">
-                        <button onClick={handleRestart} className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 text-xs font-medium">
+                    <div className="flex gap-6">
+                        <button onClick={handleRestart} className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 text-xs font-medium transition-colors">
                             <RotateCcw className="w-4 h-4" /> Restart
+                        </button>
+                        <button onClick={() => { handleRestart(); setIsAuthenticated(false); }} className="flex items-center gap-2 text-slate-400 hover:text-red-600 text-xs font-medium transition-colors">
+                            <LogOut className="w-4 h-4" /> Logout
                         </button>
                     </div>
                 </div>

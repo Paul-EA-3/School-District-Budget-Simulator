@@ -21,12 +21,30 @@ Firebase Hosting is the simplest and most cost-effective way to host a Vite appl
 
 ## Alternative: Google Cloud Run
 
-If you plan to add a Node.js backend or want more control over the runtime environment, Cloud Run is an excellent choice.
+Cloud Run is an excellent choice for scaling and more control over the runtime environment.
 
-### Steps to Deploy:
-1.  **Containerize**: Create a `Dockerfile` for the application.
-2.  **Build Image**: `gcloud builds submit --tag gcr.io/[PROJECT-ID]/budget-simulator`
-3.  **Deploy**: `gcloud run deploy --image gcr.io/[PROJECT-ID]/budget-simulator --platform managed`
+### Steps to Deploy with Cloud Build (GitHub Integration):
+This repository includes a `Dockerfile` and `cloudbuild.yaml` for automated deployment.
+
+1.  **Create a Cloud Build Trigger**:
+    *   Connect your GitHub repository in the Google Cloud Console.
+    *   Create a trigger that runs on pushes to your main branch.
+    *   Set the **Configuration** to `cloudbuild.yaml`.
+
+2.  **Configure Environment Variables (Build Args)**:
+    Vite requires environment variables at build time. In your Cloud Build trigger, add the following **Substitution variables**:
+    *   `_VITE_GEMINI_API_KEY`: Your API key.
+    *   `_VITE_GOOGLE_MAPS_API_KEY`: Your Maps API key.
+    *   `_VITE_GA_TRACKING_ID`: Your Analytics ID.
+
+3.  **Permissions**:
+    Ensure the Cloud Build service account has the following roles:
+    *   `Cloud Run Admin`
+    *   `Service Account User`
+
+### Manual Deploy:
+1.  `gcloud builds submit --tag gcr.io/[PROJECT-ID]/budget-simulator --build-arg VITE_GEMINI_API_KEY=[KEY] ...`
+2.  `gcloud run deploy --image gcr.io/[PROJECT-ID]/budget-simulator --platform managed`
 
 ---
 
