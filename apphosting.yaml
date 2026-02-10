@@ -3,6 +3,16 @@
 
 runtime: nodejs20
 
+# Settings for the build process (essential for Vite SPAs)
+buildConfig:
+  environmentVariables:
+    - variable: VITE_GEMINI_API_KEY
+      secret: GEMINI_API_KEY
+    - variable: VITE_GOOGLE_MAPS_API_KEY
+      secret: GOOGLE_MAPS_API_KEY
+    - variable: VITE_GA_TRACKING_ID
+      secret: GA_TRACKING_ID
+
 # Settings for the server-side runtime
 runConfig:
   environmentVariables:
