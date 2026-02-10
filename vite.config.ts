@@ -14,8 +14,6 @@ export default defineConfig(({ mode }) => {
         // Keep these for backward compatibility if needed,
         // but prefer import.meta.env for new code
         'process.env.VITE_GEMINI_API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY),
-        'process.env.VITE_GOOGLE_MAPS_API_KEY': JSON.stringify(env.VITE_GOOGLE_MAPS_API_KEY),
-        'process.env.VITE_GA_TRACKING_ID': JSON.stringify(env.VITE_GA_TRACKING_ID),
       },
       resolve: {
         alias: {
