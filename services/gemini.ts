@@ -6,9 +6,16 @@ import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 export const FAST_MODEL = "gemini-2.0-flash";
 export const PRO_MODEL = "gemini-2.0-flash-thinking-exp"; // or "gemini-1.5-pro"
 
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+// Graceful fallback for missing API Key to prevent top-level crash
 const genAI = new GoogleGenAI({
-    apiKey: import.meta.env.VITE_GEMINI_API_KEY
+    apiKey: apiKey || "MISSING_API_KEY"
 });
+
+if (!apiKey) {
+    console.warn("VITE_GEMINI_API_KEY is not set. AI features will be unavailable.");
+}
 
 /**
  * Common safety settings
