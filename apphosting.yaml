@@ -3,7 +3,8 @@
 
 runtime: nodejs20
 runConfig:
-  runCommand: node dist/index.js
+  basePath: /
+  publishDir: dist
   environmentVariables:
     - variable: VITE_GEMINI_API_KEY
       secret: GEMINI_API_KEY
