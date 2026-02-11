@@ -15,8 +15,11 @@ import SimulationResults from './components/SimulationResults';
 import { fetchUSAspending, fetchSocrataBudget, fetchStateLevelData, find_state_api, StateFiscalData, StateApiDiscovery } from './services/api';
 import { harmonize_api_data } from './services/harmonizer';
 import genAI, { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings } from './services/gemini';
+import { useAuth } from './hooks/useAuth';
+import LoginPage from './components/LoginPage';
 
 const App: React.FC = () => {
+  const { user } = useAuth();
   // --- 1. STATE INITIALIZATION ---
   const [districtContext, setDistrictContext] = useState<{name: string, location: string, state: string} | null>(null);
   const [scenarioId, setScenarioId] = useState<string | null>(null);
@@ -338,7 +341,7 @@ const App: React.FC = () => {
           ${stateData ? `
           *** MANDATORY STATE DATA ALIGNMENT ***
           - Average Spending Per Pupil must be close to: $${stateData.ppe}
-          - Average Proficiency (Math/ELA) must be close to: ${stateData.proficiency.composite}%
+          - Average Proficiency (Math/ELA) must be close to: ${state.proficiency.composite}%
           - Average Poverty Rate must be close to: ${(stateData.economicallyDisadvantaged * 100).toFixed(0)}%
           ` : ''}
           
@@ -553,6 +556,10 @@ const App: React.FC = () => {
 
   // --- 5. RENDER LOGIC (Conditional Returns) ---
   
+  if (!user) {
+    return <LoginPage />;
+  }
+
   if (isGeneratingBriefing) {
       return (
         <LoadingScreen
