@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { Lock, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
 import Logo from './Logo';
+import useAuth from '../hooks/useAuth';
 
 interface LoginProps {
   onLogin: () => void;
@@ -11,16 +12,17 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [accessCode, setAccessCode] = useState('');
   const [error, setError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { login } = useAuth();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setError(false);
 
-    // Simple authentication logic
-    // In a real app, this would be an API call
+    // Simple authentication logic using the useAuth hook
     setTimeout(() => {
-      if (accessCode.toUpperCase() === 'EDUNOMICS') {
+      const success = login(accessCode);
+      if (success) {
         onLogin();
       } else {
         setError(true);

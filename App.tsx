@@ -16,12 +16,12 @@ import Login from './components/Login';
 import { fetchUSAspending, fetchSocrataBudget, fetchStateLevelData, find_state_api, StateFiscalData, StateApiDiscovery } from './services/api';
 import { harmonize_api_data } from './services/harmonizer';
 import genAI, { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings } from './services/gemini';
+import useAuth from './hooks/useAuth';
 
 const App: React.FC = () => {
+  const { isAuthenticated, logout, setIsAuthenticated } = useAuth();
+
   // --- 1. STATE INITIALIZATION ---
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem('is_authenticated') === 'true';
-  });
   const [districtContext, setDistrictContext] = useState<{name: string, location: string, state: string} | null>(null);
   const [scenarioId, setScenarioId] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
@@ -65,10 +65,6 @@ const App: React.FC = () => {
   // --- 2. EFFECT HOOKS ---
 
   useEffect(() => {
-    localStorage.setItem('is_authenticated', isAuthenticated.toString());
-  }, [isAuthenticated]);
-
-  useEffect(() => {
     const handleScroll = () => setIsCompact(window.scrollY > 50);
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
@@ -85,16 +81,14 @@ const App: React.FC = () => {
     let isActive = true;
     let factInterval: ReturnType<typeof setInterval>;
 
-    if (isGeneratingBriefing || (isGeneratingSim && started)) {
+    if ((isGeneratingBriefing || (isGeneratingSim && started)) && genAI) {
         const fetchFact = async () => {
             if (!isActive) return;
             try {
                 // Keep Fact Gen on Flash for speed
-                const response = await genAI.models.generateContent({
-                    model: FAST_MODEL,
-                    contents: "Generate a single, fascinating, one-sentence statistic about US school district finance."
-                });
-                const text = response.text;
+                const model = genAI.getGenerativeModel({ model: FAST_MODEL });
+                const response = await model.generateContent("Generate a single, fascinating, one-sentence statistic about US school district finance.");
+                const text = response.response.text();
                 if (text && isActive) setLoadingFact(text.trim());
             } catch(e) {
                 if (isActive) setLoadingFact(EDUCATION_STATS[Math.floor(Math.random() * EDUCATION_STATS.length)]);
@@ -276,18 +270,28 @@ const App: React.FC = () => {
       }
     `;
 
+    if (!genAI) {
+        setScenarioId('suburban');
+        setBaseGameState(SCENARIOS['suburban'].initialState);
+        setIsGeneratingBriefing(false);
+        return;
+    }
+
     try {
-        const response = await genAI.models.generateContent({
+        const model = genAI.getGenerativeModel({
             model: PRO_MODEL,
-            config: {
-                tools: [{ googleSearch: {} }] as any,
+            generationConfig: {
                 responseMimeType: 'application/json',
-                safetySettings
             },
+            safetySettings
+        });
+
+        const response = await model.generateContent({
+            tools: [{ googleSearch: {} }] as any,
             contents: prompt
         });
 
-        const text = response.text;
+        const text = response.response.text();
         if (!text) throw new Error("No AI Response");
         
         const data = safeJsonParse(text);
@@ -334,6 +338,15 @@ const App: React.FC = () => {
     setIsGeneratingSim(true);
     // NOTE: This runs in background usually
 
+    if (!genAI) {
+        setSchools(SCENARIOS[scenarioId].initialSchools);
+        setDecisions(generateProposals(scenarioId, -1000000, new Set()));
+        setGameState(baseGameState);
+        setSimGenerationComplete(true);
+        setIsGeneratingSim(false);
+        return;
+    }
+
     try {
         const prompt = `
           CRITICAL: Data API. Output JSON only.
@@ -346,7 +359,7 @@ const App: React.FC = () => {
           ${stateData ? `
           *** MANDATORY STATE DATA ALIGNMENT ***
           - Average Spending Per Pupil must be close to: $${stateData.ppe}
-          - Average Proficiency (Math/ELA) must be close to: ${stateData.proficiency.composite}%
+          - Average Proficiency (Math/ELA) math: ${stateData.proficiency.math}%, ela: ${stateData.proficiency.ela}%
           - Average Poverty Rate must be close to: ${(stateData.economicallyDisadvantaged * 100).toFixed(0)}%
           ` : ''}
           
@@ -358,17 +371,20 @@ const App: React.FC = () => {
           }
         `;
 
-        const response = await genAI.models.generateContent({
+        const model = genAI.getGenerativeModel({
             model: PRO_MODEL,
-            config: {
-                tools: [{ googleSearch: {} }] as any,
+            generationConfig: {
                 responseMimeType: 'application/json',
-                safetySettings
             },
+            safetySettings
+        });
+
+        const response = await model.generateContent({
+            tools: [{ googleSearch: {} }] as any,
             contents: prompt
         });
 
-        let text = response.text;
+        let text = response.response.text();
         if(!text) throw new Error("Empty AI Response");
         
         let data = safeJsonParse(text);
@@ -487,6 +503,13 @@ const App: React.FC = () => {
     
     if (!gameState || !scenarioId) return;
 
+    if (!genAI) {
+        setBoardFeedback({ approved: true, voteCount: "Pass (Override)", feedback: "AI Unavailable." });
+        setSimulationEnded(true);
+        setIsSubmitting(false);
+        return;
+    }
+
     const activeProposals = decisions.filter(d => d.selected !== 'None');
     const prompt = `
       You are the School Board.
@@ -503,15 +526,16 @@ const App: React.FC = () => {
     `;
 
     try {
-        const response = await genAI.models.generateContent({
+        const model = genAI.getGenerativeModel({
             model: PRO_MODEL,
-            config: {
+            generationConfig: {
                 responseMimeType: 'application/json',
-                safetySettings
             },
-            contents: prompt
+            safetySettings
         });
-        const text = response.text;
+
+        const response = await model.generateContent(prompt);
+        const text = response.response.text();
         const data = safeJsonParse(text);
         if(!data) throw new Error("Invalid JSON");
         setBoardFeedback(data);
@@ -525,18 +549,20 @@ const App: React.FC = () => {
   };
 
   const handleChatSend = async (msg: string) => {
+    if (!genAI) {
+        setChatHistory(p => [...p, { role: 'user', text: msg }, { role: 'model', text: "AI is currently offline. Please check your API keys." }]);
+        return;
+    }
     setIsChatTyping(true);
     setChatHistory(p => [...p, { role: 'user', text: msg }]);
     try {
-        const chat = genAI.chats.create({
-            model: PRO_MODEL,
+        const model = genAI.getGenerativeModel({ model: PRO_MODEL, safetySettings });
+        const chat = model.startChat({
             history: chatHistory.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
-            config: {
-                safetySettings
-            }
         });
-        const response = await chat.sendMessage({ message: msg });
-        setChatHistory(p => [...p, { role: 'model', text: response.text || "..." }]);
+        const result = await chat.sendMessage(msg);
+        const response = await result.response;
+        setChatHistory(p => [...p, { role: 'model', text: response.text() || "..." }]);
     } catch(e) {
         setChatHistory(p => [...p, { role: 'model', text: "Connection error." }]);
     } finally {
@@ -645,7 +671,7 @@ const App: React.FC = () => {
                         <button onClick={handleRestart} className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 text-xs font-medium transition-colors">
                             <RotateCcw className="w-4 h-4" /> Restart
                         </button>
-                        <button onClick={() => { handleRestart(); setIsAuthenticated(false); }} className="flex items-center gap-2 text-slate-400 hover:text-red-600 text-xs font-medium transition-colors">
+                        <button onClick={() => { handleRestart(); logout(); }} className="flex items-center gap-2 text-slate-400 hover:text-red-600 text-xs font-medium transition-colors">
                             <LogOut className="w-4 h-4" /> Logout
                         </button>
                     </div>

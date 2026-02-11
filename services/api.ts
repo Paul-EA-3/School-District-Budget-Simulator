@@ -31,9 +31,9 @@ export interface StateApiDiscovery {
  * Uses Gemini 3 Pro (Thinking) to intelligently find specific State API endpoints.
  */
 export const find_state_api = async (state_abbreviation: string): Promise<StateApiDiscovery | null> => {
+  if (!genAI) return null;
   try {
-    const response = await genAI.models.generateContent({
-        model: PRO_MODEL,
+    const response = await genAI.getGenerativeModel({ model: PRO_MODEL }).generateContent({
         config: {
             tools: [{ googleSearch: {} }] as any,
             safetySettings
@@ -66,14 +66,18 @@ export const find_state_api = async (state_abbreviation: string): Promise<StateA
  * Queries State Department of Education data via Google Search using Thinking Mode.
  */
 export const fetchStateLevelData = async (state: string, districtName: string): Promise<StateFiscalData | null> => {
+    if (!genAI) return null;
     try {
-        const response = await genAI.models.generateContent({
+        const model = genAI.getGenerativeModel({
             model: PRO_MODEL,
-            config: {
-                tools: [{ googleSearch: {} }] as any,
+            generationConfig: {
                 responseMimeType: "application/json",
-                safetySettings
             },
+            safetySettings
+        });
+
+        const response = await model.generateContent({
+            tools: [{ googleSearch: {} }] as any,
             contents: `ACT AS A DATA SCRAPER.
           Task: Find official State Department of Education data for: "${districtName}" in ${state}.
           

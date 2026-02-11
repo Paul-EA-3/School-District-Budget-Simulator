@@ -8,13 +8,20 @@ export const PRO_MODEL = "gemini-2.0-flash-thinking-exp"; // or "gemini-1.5-pro"
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
-// Graceful fallback for missing API Key to prevent top-level crash
-const genAI = new GoogleGenAI({
-    apiKey: apiKey || "MISSING_API_KEY"
-});
-
-if (!apiKey) {
-    console.warn("VITE_GEMINI_API_KEY is not set. AI features will be unavailable.");
+/**
+ * Graceful initialization of GoogleGenAI.
+ * If the API key is missing, we return null to allow the application to
+ * load without crashing, while disabling AI-dependent features.
+ */
+let genAI: any = null;
+if (apiKey && apiKey !== 'dummy' && apiKey !== 'your_gemini_api_key_here') {
+    try {
+        genAI = new GoogleGenAI(apiKey);
+    } catch (e) {
+        console.error("Failed to initialize GoogleGenAI:", e);
+    }
+} else {
+    console.warn("VITE_GEMINI_API_KEY is not set or is using a placeholder. AI features will be unavailable.");
 }
 
 /**
