@@ -1,0 +1,48 @@
+steps:
+  # 1. Build the Docker image
+  # We pass build-time arguments for Vite environment variables
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'Build'
+    args:
+      - 'build'
+      - '--build-arg', 'VITE_GEMINI_API_KEY=$_VITE_GEMINI_API_KEY'
+      - '--build-arg', 'VITE_GOOGLE_MAPS_API_KEY=$_VITE_GOOGLE_MAPS_API_KEY'
+      - '--build-arg', 'VITE_GA_TRACKING_ID=$_VITE_GA_TRACKING_ID'
+      - '-t', 'gcr.io/$PROJECT_ID/budget-simulator:$COMMIT_SHA'
+      - '-t', 'gcr.io/$PROJECT_ID/budget-simulator:latest'
+      - '.'
+
+  # 2. Push the image to Google Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'Push'
+    args: ['push', 'gcr.io/$PROJECT_ID/budget-simulator:$COMMIT_SHA']
+
+  # 3. Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'Deploy'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'budget-simulator'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/budget-simulator:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+
+# Images to be pushed and tracked
+images:
+  - 'gcr.io/$PROJECT_ID/budget-simulator:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/budget-simulator:latest'
+
+# Default substitution values (should be overridden in the Cloud Build Trigger)
+substitutions:
+  _VITE_GEMINI_API_KEY: ''
+  _VITE_GOOGLE_MAPS_API_KEY: ''
+  _VITE_GA_TRACKING_ID: ''
+
+options:
+  logging: CLOUD_LOGGING_ONLY
