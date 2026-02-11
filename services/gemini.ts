@@ -1,21 +1,20 @@
 
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
+import {
+    getAI,
+    getGenerativeModel,
+    GoogleAIBackend,
+    HarmCategory,
+    HarmBlockThreshold
+} from "firebase/ai";
+import { app } from "../firebase";
 
 // Model constants
 // Note: gemini-2.0-flash is currently a good default for this SDK
 export const FAST_MODEL = "gemini-2.0-flash";
 export const PRO_MODEL = "gemini-2.0-flash-thinking-exp"; // or "gemini-1.5-pro"
 
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-
-// Graceful fallback for missing API Key to prevent top-level crash
-const genAI = new GoogleGenAI({
-    apiKey: apiKey || "MISSING_API_KEY"
-});
-
-if (!apiKey) {
-    console.warn("VITE_GEMINI_API_KEY is not set. AI features will be unavailable.");
-}
+// Initialize the Firebase AI Logic service
+const ai = getAI(app, { backend: new GoogleAIBackend() });
 
 /**
  * Common safety settings
@@ -47,6 +46,73 @@ export const safeJsonParse = (text: string) => {
             }
         }
         return null;
+    }
+};
+
+/**
+ * Core AI interaction helpers using Firebase AI Logic
+ */
+
+/**
+ * Generates content using the specified model and contents.
+ */
+export async function generateAIContent(modelName: string, contents: any, options: any = {}) {
+    const { tools, safetySettings: configSafety, ...generationConfig } = options;
+    const model = getGenerativeModel(ai, {
+        model: modelName,
+        generationConfig,
+        safetySettings: configSafety || safetySettings,
+        tools
+    });
+    const result = await model.generateContent(contents);
+    return {
+        text: result.response.text(),
+        response: result.response
+    };
+}
+
+/**
+ * Creates a chat session.
+ */
+export function createAIChat(modelName: string, history: any[], options: any = {}) {
+    const { tools, safetySettings: configSafety, ...generationConfig } = options;
+    const model = getGenerativeModel(ai, {
+        model: modelName,
+        generationConfig,
+        safetySettings: configSafety || safetySettings,
+        tools
+    });
+    const chatSession = model.startChat({
+        history: history.map(m => ({
+            role: m.role,
+            parts: Array.isArray(m.parts) ? m.parts : [{ text: m.text || m.parts }]
+        }))
+    });
+
+    return {
+        sendMessage: async (message: any) => {
+            const result = await chatSession.sendMessage(message);
+            return {
+                text: result.response.text(),
+                response: result.response
+            };
+        }
+    };
+}
+
+/**
+ * genAI compatibility object for existing call sites.
+ */
+const genAI = {
+    models: {
+        generateContent: async (args: { model: string, contents: any, config?: any }) => {
+            return generateAIContent(args.model, args.contents, args.config);
+        }
+    },
+    chats: {
+        create: (args: { model: string, history: any[], config?: any }) => {
+            return createAIChat(args.model, args.history, args.config);
+        }
     }
 };
 

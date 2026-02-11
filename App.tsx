@@ -15,7 +15,7 @@ import SimulationResults from './components/SimulationResults';
 import Login from './components/Login';
 import { fetchUSAspending, fetchSocrataBudget, fetchStateLevelData, find_state_api, StateFiscalData, StateApiDiscovery } from './services/api';
 import { harmonize_api_data } from './services/harmonizer';
-import genAI, { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings } from './services/gemini';
+import genAI, { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings, generateAIContent, createAIChat } from './services/gemini';
 import { useAuth } from './hooks/useAuth';
 import LoginPage from './components/LoginPage';
 
@@ -93,10 +93,7 @@ const App: React.FC = () => {
             if (!isActive) return;
             try {
                 // Keep Fact Gen on Flash for speed
-                const response = await genAI.models.generateContent({
-                    model: FAST_MODEL,
-                    contents: "Generate a single, fascinating, one-sentence statistic about US school district finance."
-                });
+                const response = await generateAIContent(FAST_MODEL, "Generate a single, fascinating, one-sentence statistic about US school district finance.");
                 const text = response.text;
                 if (text && isActive) setLoadingFact(text.trim());
             } catch(e) {
@@ -280,14 +277,10 @@ const App: React.FC = () => {
     `;
 
     try {
-        const response = await genAI.models.generateContent({
-            model: PRO_MODEL,
-            config: {
-                tools: [{ googleSearch: {} }] as any,
-                responseMimeType: 'application/json',
-                safetySettings
-            },
-            contents: prompt
+        const response = await generateAIContent(PRO_MODEL, prompt, {
+            tools: [{ googleSearch: {} }] as any,
+            responseMimeType: 'application/json',
+            safetySettings
         });
 
         const text = response.text;
@@ -361,14 +354,10 @@ const App: React.FC = () => {
           }
         `;
 
-        const response = await genAI.models.generateContent({
-            model: PRO_MODEL,
-            config: {
-                tools: [{ googleSearch: {} }] as any,
-                responseMimeType: 'application/json',
-                safetySettings
-            },
-            contents: prompt
+        const response = await generateAIContent(PRO_MODEL, prompt, {
+            tools: [{ googleSearch: {} }] as any,
+            responseMimeType: 'application/json',
+            safetySettings
         });
 
         let text = response.text;
@@ -506,13 +495,9 @@ const App: React.FC = () => {
     `;
 
     try {
-        const response = await genAI.models.generateContent({
-            model: PRO_MODEL,
-            config: {
-                responseMimeType: 'application/json',
-                safetySettings
-            },
-            contents: prompt
+        const response = await generateAIContent(PRO_MODEL, prompt, {
+            responseMimeType: 'application/json',
+            safetySettings
         });
         const text = response.text;
         const data = safeJsonParse(text);
@@ -531,14 +516,10 @@ const App: React.FC = () => {
     setIsChatTyping(true);
     setChatHistory(p => [...p, { role: 'user', text: msg }]);
     try {
-        const chat = genAI.chats.create({
-            model: PRO_MODEL,
-            history: chatHistory.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
-            config: {
-                safetySettings
-            }
+        const chat = createAIChat(PRO_MODEL, chatHistory.map(m => ({ role: m.role, parts: [{ text: m.text }] })), {
+            safetySettings
         });
-        const response = await chat.sendMessage({ message: msg });
+        const response = await chat.sendMessage(msg);
         setChatHistory(p => [...p, { role: 'model', text: response.text || "..." }]);
     } catch(e) {
         setChatHistory(p => [...p, { role: 'model', text: "Connection error." }]);

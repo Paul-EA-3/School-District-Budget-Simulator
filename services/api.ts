@@ -1,5 +1,5 @@
 
-import { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings } from "./gemini";
+import { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings, generateAIContent } from "./gemini";
 import genAI from "./gemini";
 
 export interface FinancialState {
@@ -32,13 +32,7 @@ export interface StateApiDiscovery {
  */
 export const find_state_api = async (state_abbreviation: string): Promise<StateApiDiscovery | null> => {
   try {
-    const response = await genAI.models.generateContent({
-        model: PRO_MODEL,
-        config: {
-            tools: [{ googleSearch: {} }] as any,
-            safetySettings
-        },
-        contents: `For the state with the abbreviation ${state_abbreviation}, find the most direct public URL for:
+    const response = await generateAIContent(PRO_MODEL, `For the state with the abbreviation ${state_abbreviation}, find the most direct public URL for:
       1. District-Level Per-Pupil Expenditure (PPE) Data.
       2. District-Level Academic Assessment Proficiency Rates (e.g., state test scores).
       
@@ -49,7 +43,10 @@ export const find_state_api = async (state_abbreviation: string): Promise<StateA
       - finance_api_url (string): The most relevant public API/raw data URL for PPE or finance data.
       - assessment_api_url (string): The most relevant public API/raw data URL for test/proficiency data.
       - source_authority (string): The name of the agency or portal that hosts the data.
-    `});
+    `, {
+        tools: [{ googleSearch: {} }] as any,
+        safetySettings
+    });
 
     const text = response.text;
     if (!text) return null;
@@ -67,14 +64,7 @@ export const find_state_api = async (state_abbreviation: string): Promise<StateA
  */
 export const fetchStateLevelData = async (state: string, districtName: string): Promise<StateFiscalData | null> => {
     try {
-        const response = await genAI.models.generateContent({
-            model: PRO_MODEL,
-            config: {
-                tools: [{ googleSearch: {} }] as any,
-                responseMimeType: "application/json",
-                safetySettings
-            },
-            contents: `ACT AS A DATA SCRAPER.
+        const response = await generateAIContent(PRO_MODEL, `ACT AS A DATA SCRAPER.
           Task: Find official State Department of Education data for: "${districtName}" in ${state}.
           
           MANDATE: Perform a Google Search for these exact terms:
@@ -96,7 +86,11 @@ export const fetchStateLevelData = async (state: string, districtName: string): 
             "enrollment": number,
             "source": "String (e.g. 'Maryland State Dept of Education Report Card')"
           }
-        `});
+        `, {
+            tools: [{ googleSearch: {} }] as any,
+            responseMimeType: "application/json",
+            safetySettings
+        });
 
         const text = response.text;
         if (!text) return null;
