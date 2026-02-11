@@ -2,10 +2,12 @@
 # For more information, see https://firebase.google.com/docs/app-hosting/configure-app-hosting
 
 runtime: nodejs20
+
 runConfig:
-  runCommand: npm run preview -- --host --port 8080
-  environmentVariables:
-    - variable: VITE_GOOGLE_MAPS_API_KEY
-      secret: GOOGLE_MAPS_API_KEY
-    - variable: VITE_GA_TRACKING_ID
-      secret: GA_TRACKING_ID
+  runCommand: npm start
+
+env:
+  - variable: VITE_GOOGLE_MAPS_API_KEY
+    secret: GOOGLE_MAPS_API_KEY
+  - variable: VITE_GA_TRACKING_ID
+    secret: GA_TRACKING_ID
