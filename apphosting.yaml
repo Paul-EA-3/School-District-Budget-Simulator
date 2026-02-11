@@ -2,9 +2,8 @@
 # For more information, see https://firebase.google.com/docs/app-hosting/configure-app-hosting
 
 runtime: nodejs20
-
-# Settings for the server-side runtime
 runConfig:
+  runCommand: node dist/index.js
   environmentVariables:
     - variable: VITE_GEMINI_API_KEY
       secret: GEMINI_API_KEY
