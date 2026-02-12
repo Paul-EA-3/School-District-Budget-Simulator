@@ -20,8 +20,21 @@
       gtag('config', '%VITE_GA_TRACKING_ID%');
     </script>
 
-    <!-- Google Maps API -->
-    <script async src="https://maps.googleapis.com/maps/api/js?key=%VITE_GOOGLE_MAPS_API_KEY%&libraries=places&loading=async"></script>
+    <!-- Google Maps API (Conditional Load) -->
+    <script>
+      (function() {
+        const key = '%VITE_GOOGLE_MAPS_API_KEY%';
+        // Only load if key is provided and not a dummy/placeholder value
+        if (key && key !== 'dummy' && key !== 'your_google_maps_api_key_here' && !key.startsWith('%')) {
+          const script = document.createElement('script');
+          script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&loading=async`;
+          script.async = true;
+          document.head.appendChild(script);
+        } else {
+          console.warn('Google Maps API key is missing or invalid. Falling back to manual entry.');
+        }
+      })();
+    </script>
 
     <style>
         /* Custom Scrollbar for Grid containers */
