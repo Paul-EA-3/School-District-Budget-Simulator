@@ -44,15 +44,24 @@ const CustomPlacesAutocomplete: React.FC<AutocompleteProps> = ({ placeholder, on
 
   // Wait for Google API to load
   useEffect(() => {
+    const startTime = Date.now();
+    const timeout = 3000;
+    let timeoutId: ReturnType<typeof setTimeout>;
+
     const waitForGoogle = () => {
       if (window.google && window.google.maps && window.google.maps.places) {
         autocompleteService.current = new window.google.maps.places.AutocompleteService();
         setMapsReady(true);
       } else {
-        setTimeout(waitForGoogle, 200);
+        if (Date.now() - startTime < timeout) {
+          timeoutId = setTimeout(waitForGoogle, 200);
+        }
       }
     };
     waitForGoogle();
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, []);
 
   const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -172,22 +181,36 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
   const [isIdentifying, setIsIdentifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mapsServiceReady, setMapsServiceReady] = useState(false);
+  const [useFallback, setUseFallback] = useState(false);
 
   const placesService = useRef<any>(null);
 
-  // Initialize Places Service Robustly
+  // Initialize Places Service Robustly with Timeout Fallback
   useEffect(() => {
+    const startTime = Date.now();
+    const timeout = 3000; // 3 seconds timeout
+    let timeoutId: ReturnType<typeof setTimeout>;
+
     const initService = () => {
       if (window.google && window.google.maps && window.google.maps.places) {
         // Create a virtual map div as required by the PlacesService
         const mapDiv = document.createElement('div'); 
         placesService.current = new window.google.maps.places.PlacesService(mapDiv);
         setMapsServiceReady(true);
+        setUseFallback(false);
       } else {
-        setTimeout(initService, 200);
+        if (Date.now() - startTime > timeout) {
+          console.warn("Google Maps API failed to load within timeout. Using fallback mode.");
+          setUseFallback(true);
+        } else {
+          timeoutId = setTimeout(initService, 200);
+        }
       }
     };
     initService();
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, []);
 
   // -------------------------------------------------------------------------
@@ -272,12 +295,11 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
   };
 
   const handleConfirm = () => {
-      if (!placeDetails) return;
       onSelect({
           name: districtName,
-          location: placeDetails.formatted_address || '',
+          location: placeDetails?.formatted_address || `${districtName}, ${districtState}`,
           state: districtState,
-          description: `Located in ${placeDetails.formatted_address}`
+          description: placeDetails?.formatted_address ? `Located in ${placeDetails.formatted_address}` : `Manual entry for ${districtName}, ${districtState}`
       });
   };
 
@@ -329,6 +351,40 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
                             <Loader2 className="w-5 h-5 animate-spin" />
                             Retrieving School Details...
                         </div>
+                    ) : useFallback ? (
+                        <div className="w-full space-y-4 animate-in fade-in duration-500">
+                             <div className="text-left">
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">School District Name</label>
+                                <input
+                                    type="text"
+                                    className="w-full border-2 border-blue-400 rounded-lg p-3 text-lg outline-none text-slate-700 focus:border-blue-600 transition-all shadow-[0_0_0_4px_rgba(96,165,250,0.1)]"
+                                    placeholder="Enter District Name (e.g. Springfield Public Schools)"
+                                    value={districtName}
+                                    onChange={(e) => setDistrictName(e.target.value)}
+                                    autoFocus
+                                />
+                            </div>
+                            <div className="text-left">
+                                <label className="block text-xs font-bold text-slate-500 uppercase mb-1">State</label>
+                                <select
+                                    className="w-full border-2 border-slate-200 rounded-lg p-3 text-lg outline-none text-slate-700 focus:border-blue-400 transition-all bg-white"
+                                    value={districtState}
+                                    onChange={(e) => setDistrictState(e.target.value)}
+                                >
+                                    <option value="">Select State</option>
+                                    {["Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut","Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa","Kansas","Kentucky","Louisiana","Maine","Maryland","Massachusetts","Michigan","Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada","New Hampshire","New Jersey","New Mexico","New York","North Carolina","North Dakota","Ohio","Oklahoma","Oregon","Pennsylvania","Rhode Island","South Carolina","South Dakota","Tennessee","Texas","Utah","Vermont","Virginia","Washington","West Virginia","Wisconsin","Wyoming"].map(s => (
+                                        <option key={s} value={s}>{s}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <button
+                                onClick={() => setStep('validate')}
+                                disabled={!districtName || !districtState}
+                                className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                            >
+                                Continue <ArrowRight className="w-5 h-5" />
+                            </button>
+                        </div>
                     ) : (
                         <CustomPlacesAutocomplete 
                             placeholder="Search for your School or School District..."
@@ -340,11 +396,11 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
             </div>
         )}
 
-        {step === 'validate' && placeDetails && (
+        {step === 'validate' && districtName && (
             <div className="flex-1 flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-300 w-full max-w-xl mx-auto">
                  <div className="w-full mb-6">
                     <button onClick={handleReset} className="text-xs text-slate-400 hover:text-indigo-600 mb-2 flex items-center gap-1">
-                        ← Back to Search
+                        ← Back to {useFallback ? 'Entry' : 'Search'}
                     </button>
                     <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex items-start gap-3">
                         <div className="bg-white p-2 rounded-full shadow-sm text-emerald-600">
@@ -352,8 +408,8 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
                         </div>
                         <div>
                             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Selected Location</div>
-                            <div className="font-bold text-slate-900 text-lg">{placeDetails.name}</div>
-                            <div className="text-sm text-slate-500">{placeDetails.formatted_address}</div>
+                            <div className="font-bold text-slate-900 text-lg">{placeDetails?.name || districtName}</div>
+                            <div className="text-sm text-slate-500">{placeDetails?.formatted_address || `${districtName}, ${districtState}`}</div>
                         </div>
                     </div>
                 </div>
@@ -374,6 +430,14 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
                                 <div className="h-[50px] border border-slate-200 rounded-lg bg-slate-50 flex items-center px-3 text-slate-400 italic text-sm">
                                     AI is identifying district...
                                 </div>
+                            ) : useFallback ? (
+                                <input
+                                    type="text"
+                                    className="w-full border border-slate-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-400 outline-none transition-all"
+                                    value={districtName}
+                                    onChange={(e) => setDistrictName(e.target.value)}
+                                    placeholder="Enter School District Name..."
+                                />
                             ) : (
                                 <CustomPlacesAutocomplete 
                                     placeholder={districtName || "Search for your District..."}
