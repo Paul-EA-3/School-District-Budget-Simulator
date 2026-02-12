@@ -16,11 +16,8 @@ import Login from './components/Login';
 import { fetchUSAspending, fetchSocrataBudget, fetchStateLevelData, find_state_api, StateFiscalData, StateApiDiscovery } from './services/api';
 import { harmonize_api_data } from './services/harmonizer';
 import genAI, { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings, generateAIContent, createAIChat } from './services/gemini';
-import { useAuth } from './hooks/useAuth';
-import LoginPage from './components/LoginPage';
 
 const App: React.FC = () => {
-  const { user } = useAuth();
   // --- 1. STATE INITIALIZATION ---
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     return localStorage.getItem('is_authenticated') === 'true';
@@ -548,10 +545,6 @@ const App: React.FC = () => {
   if (!isAuthenticated) {
     return <Login onLogin={() => setIsAuthenticated(true)} />;
   }
-  
-  if (!user) {
-    return <LoginPage />;
-  }
 
   if (isGeneratingBriefing) {
       return (
@@ -585,12 +578,6 @@ const App: React.FC = () => {
                      <span className="text-xs">Simulator by</span>
                      <Logo className="h-6" />
                  </div>
-                 <button
-                    onClick={() => setIsAuthenticated(false)}
-                    className="flex items-center gap-2 text-slate-400 hover:text-red-600 text-xs font-medium transition-colors"
-                 >
-                    <LogOut className="w-3 h-3" /> Logout
-                 </button>
              </div>
           </div>
       );
@@ -632,9 +619,6 @@ const App: React.FC = () => {
                     <div className="flex gap-6">
                         <button onClick={handleRestart} className="flex items-center gap-2 text-slate-400 hover:text-indigo-600 text-xs font-medium transition-colors">
                             <RotateCcw className="w-4 h-4" /> Restart
-                        </button>
-                        <button onClick={() => { handleRestart(); setIsAuthenticated(false); }} className="flex items-center gap-2 text-slate-400 hover:text-red-600 text-xs font-medium transition-colors">
-                            <LogOut className="w-4 h-4" /> Logout
                         </button>
                     </div>
                 </div>
