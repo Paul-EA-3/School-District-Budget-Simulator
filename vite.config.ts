@@ -8,9 +8,8 @@ export default defineConfig({
     exclude: ['lucide-react'],
   },
   preview: {
-    allowedHosts: [
-      'districtsim-dev-695745414882.us-east4.run.app',
-      'districtsim-dev--sd-budget-simulator-7381-2a4c8.us-east4.hosted.app'
-    ]
+    allowedHosts: true,
+    host: true,
+    port: 8080
   }
 });
