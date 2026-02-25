@@ -59,6 +59,42 @@ export const find_state_api = async (state_abbreviation: string): Promise<StateA
 };
 
 /**
+ * Helper: Fetch District Data from discovered APIs.
+ */
+export const fetch_district_data = async (district_id: string, api_urls: StateApiDiscovery) => {
+    try {
+        const financeUrl = api_urls.finance_api_url.replace('{DISTRICT_ID}', district_id);
+        const assessmentUrl = api_urls.assessment_api_url.replace('{DISTRICT_ID}', district_id);
+
+        const [financeRes, assessmentRes] = await Promise.all([
+            fetch(financeUrl).catch(e => ({ ok: false, statusText: e.message })),
+            fetch(assessmentUrl).catch(e => ({ ok: false, statusText: e.message }))
+        ]);
+
+        let financeData = null;
+        let assessmentData = null;
+
+        if ((financeRes as Response).ok) {
+            financeData = await (financeRes as Response).json();
+        } else {
+            console.warn(`Finance API Failed: ${(financeRes as any).statusText}`);
+        }
+
+        if ((assessmentRes as Response).ok) {
+            assessmentData = await (assessmentRes as Response).json();
+        } else {
+            console.warn(`Assessment API Failed: ${(assessmentRes as any).statusText}`);
+        }
+
+        return { financeData, assessmentData };
+
+    } catch (e) {
+        console.error("fetch_district_data Critical Error:", e);
+        return null;
+    }
+};
+
+/**
  * Fetches high-precision state-level data using AI as a live web scraper.
  * Queries State Department of Education data via Google Search using Thinking Mode.
  */
