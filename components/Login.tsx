@@ -20,7 +20,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     // Simple authentication logic
     // In a real app, this would be an API call
     setTimeout(() => {
-      if (accessCode.toUpperCase() === 'EDUNOMICS') {
+      if (accessCode.toUpperCase() === 'EDUCATION') {
         onLogin();
       } else {
         setError(true);

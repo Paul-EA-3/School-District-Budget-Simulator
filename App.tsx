@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { CheckCircle, XCircle, RefreshCcw, ArrowRight, MessageSquare, RotateCcw, Loader2, Info, BrainCircuit, Bot, Terminal, LogOut } from 'lucide-react';
-import { SCENARIOS, CARD_POOL, EDUCATION_STATS, PoolCard } from './constants';
+import { SCENARIOS, EDUCATION_STATS } from './constants';
 import { GameState, School, Card, SelectionState, Scenario } from './types';
 import OnboardingModal from './components/OnboardingModal';
 import Cockpit from './components/Cockpit';
@@ -13,8 +13,10 @@ import ChatOverlay from './components/ChatOverlay';
 import LoadingScreen from './components/LoadingScreen';
 import SimulationResults from './components/SimulationResults';
 import Login from './components/Login';
-import { fetchUSAspending, fetchSocrataBudget, fetchStateLevelData, find_state_api, StateFiscalData, StateApiDiscovery } from './services/api';
+import { fetchUSAspending, fetchSocrataBudget, fetchStateLevelData, find_state_api, fetch_district_data, StateFiscalData, StateApiDiscovery } from './services/api';
 import { harmonize_api_data } from './services/harmonizer';
+import { generateProposals } from './services/simulation';
+import { useDerivedSchools } from './hooks/useDerivedSchools';
 import genAI, { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings, generateAIContent, createAIChat } from './services/gemini';
 
 const App: React.FC = () => {
@@ -108,32 +110,7 @@ const App: React.FC = () => {
   }, [isGeneratingBriefing, isGeneratingSim, started]);
 
   // --- 3. MEMOIZED VALUES ---
-  const derivedSchools = useMemo(() => {
-     if(!schools || schools.length === 0) return [];
-     return schools.map(s => {
-      let newSpend = s.spendingPerPupil;
-      let newMath = s.academicOutcome.math;
-      let newEla = s.academicOutcome.ela;
-
-      if (decisions.find(d => d.title.includes('Reading') && (d.selected === 'Fund' || d.selected === 'OneTime')) && s.povertyRate > 0.6) {
-        newEla += 5;
-        newSpend += 200;
-      }
-      if (decisions.find(d => d.title.includes('Class Size') && (d.selected === 'Fund' || d.selected === 'OneTime'))) {
-        newMath += 2;
-        newEla += 2;
-        newSpend += 500;
-      }
-      if (decisions.find(d => d.title.includes('Tutoring') && (d.selected === 'Fund' || d.selected === 'OneTime'))) {
-        newMath += 4;
-      }
-      if (decisions.find(d => d.title.includes('Arts') && d.selected === 'Fund')) { 
-             newEla -= 2; 
-      }
-
-      return { ...s, spendingPerPupil: newSpend, academicOutcome: { math: newMath, ela: newEla } };
-     });
-  }, [decisions, schools]);
+  const derivedSchools = useDerivedSchools(schools, decisions);
 
 
   // --- 4. ACTION HANDLERS ---
@@ -141,43 +118,6 @@ const App: React.FC = () => {
   // Helper: Append Log
   const addLog = (msg: string) => {
       setLoadingLog(prev => [...prev, `> ${msg}`]);
-  };
-
-
-  /**
-   * Helper: Fetch District Data from discovered APIs.
-   */
-  const fetch_district_data = async (district_id: string, api_urls: StateApiDiscovery) => {
-      try {
-          const financeUrl = api_urls.finance_api_url.replace('{DISTRICT_ID}', district_id);
-          const assessmentUrl = api_urls.assessment_api_url.replace('{DISTRICT_ID}', district_id);
-
-          const [financeRes, assessmentRes] = await Promise.all([
-              fetch(financeUrl).catch(e => ({ ok: false, statusText: e.message })),
-              fetch(assessmentUrl).catch(e => ({ ok: false, statusText: e.message }))
-          ]);
-
-          let financeData = null;
-          let assessmentData = null;
-
-          if ((financeRes as Response).ok) {
-              financeData = await (financeRes as Response).json();
-          } else {
-              console.warn(`Finance API Failed: ${(financeRes as any).statusText}`);
-          }
-
-          if ((assessmentRes as Response).ok) {
-              assessmentData = await (assessmentRes as Response).json();
-          } else {
-              console.warn(`Assessment API Failed: ${(assessmentRes as any).statusText}`);
-          }
-
-          return { financeData, assessmentData };
-
-      } catch (e) {
-          console.error("fetch_district_data Critical Error:", e);
-          return null; 
-      }
   };
 
   // Phase 1: Briefing
@@ -420,27 +360,6 @@ const App: React.FC = () => {
   };
 
   // --- Helper Functions ---
-  const generateProposals = (scenarioId: string, structuralGap: number, fundedIds: Set<string>): Card[] => {
-    const TARGET_COUNT = 8;
-    let eligibleCards = CARD_POOL.filter(card => 
-        card.validScenarios.includes('all') || card.validScenarios.includes(scenarioId as any)
-    ).filter(card => !card.unique || !fundedIds.has(card.id));
-
-    const isDeficitCrisis = structuralGap < -1000000;
-    let finalSelection: PoolCard[] = [];
-    const savingsCards = eligibleCards.filter(c => c.cost < 0);
-    
-    if (isDeficitCrisis) {
-        finalSelection.push(...[...savingsCards].sort(() => Math.random() - 0.5).slice(0, 3));
-    } else {
-        finalSelection.push(...[...savingsCards].sort(() => Math.random() - 0.5).slice(0, 1));
-    }
-
-    const remainingPool = eligibleCards.filter(c => !finalSelection.find(f => f.id === c.id));
-    finalSelection.push(...[...remainingPool].sort(() => Math.random() - 0.5).slice(0, TARGET_COUNT - finalSelection.length));
-
-    return finalSelection.map(c => ({ ...c, selected: 'None' as SelectionState })).sort(() => Math.random() - 0.5);
-  };
 
   const handleMoveCard = (id: string, dest: SelectionState) => {
     const newDecisions = decisions.map(c => c.id === id ? { ...c, selected: dest } : c);
