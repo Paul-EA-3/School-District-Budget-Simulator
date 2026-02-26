@@ -3,7 +3,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBRcd_L-6wxhMqZMf2HnClCHwk1XgqNih0",
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: "sd-budget-simulator-73816746.firebaseapp.com",
   projectId: "sd-budget-simulator-73816746",
   storageBucket: "sd-budget-simulator-73816746.appspot.com",

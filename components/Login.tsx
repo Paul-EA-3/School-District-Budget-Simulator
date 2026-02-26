@@ -20,7 +20,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     // Simple authentication logic
     // In a real app, this would be an API call
     setTimeout(() => {
-      if (accessCode.toUpperCase() === 'EDUCATION ASSOCIATES') {
+      const expectedCode = import.meta.env.VITE_ACCESS_CODE;
+      if (expectedCode && accessCode === expectedCode) {
         onLogin();
       } else {
         setError(true);

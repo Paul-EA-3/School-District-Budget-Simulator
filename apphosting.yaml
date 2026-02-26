@@ -11,3 +11,7 @@ env:
     secret: GOOGLE_MAPS_API_KEY
   - variable: VITE_GA_TRACKING_ID
     secret: GA_TRACKING_ID
+  - variable: VITE_FIREBASE_API_KEY
+    secret: FIREBASE_API_KEY
+  - variable: VITE_ACCESS_CODE
+    secret: ACCESS_CODE
