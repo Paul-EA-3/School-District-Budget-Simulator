@@ -31,9 +31,10 @@ interface AutocompleteProps {
   autoFocus?: boolean;
   disabled?: boolean;
   className?: string;
+  onFallback?: () => void;
 }
 
-const CustomPlacesAutocomplete: React.FC<AutocompleteProps> = ({ placeholder, onSelect, autoFocus, disabled, className }) => {
+const CustomPlacesAutocomplete: React.FC<AutocompleteProps> = ({ placeholder, onSelect, autoFocus, disabled, className, onFallback }) => {
   const [inputValue, setInputValue] = useState('');
   const [predictions, setPredictions] = useState<any[]>([]);
   const [isOpen, setIsOpen] = useState(false);
@@ -53,7 +54,9 @@ const CustomPlacesAutocomplete: React.FC<AutocompleteProps> = ({ placeholder, on
 
     const waitForGoogle = async () => {
       if (window.googleMapsError) {
-          setApiError("Google Maps failed to load. Using manual entry.");
+          console.error("Google Maps Error Detected:", window.googleMapsError);
+          setApiError(`Google Maps failed to load (${window.googleMapsError}). Using manual entry.`);
+          if (onFallback) onFallback();
           return;
       }
 
@@ -119,7 +122,7 @@ const CustomPlacesAutocomplete: React.FC<AutocompleteProps> = ({ placeholder, on
                 // Map legacy request to new AutocompleteRequest structure
                 const newRequest: any = {
                     input: value,
-                    region: 'us',
+                    includedRegionCodes: ['US'],
                     sessionToken: sessionToken.current
                 };
 
@@ -280,6 +283,7 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
 
     const initService = async () => {
       if (window.googleMapsError) {
+          console.error("Google Maps Initialization Error:", window.googleMapsError);
           setUseFallback(true);
           return;
       }
@@ -340,7 +344,7 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
                 if (place) {
                     // Harmonize new Place to legacy PlaceResult structure for remaining logic
                     const harmonizedPlace = {
-                        name: place.displayName,
+                        name: typeof place.displayName === 'string' ? place.displayName : place.displayName?.text || '',
                         formatted_address: place.formattedAddress,
                         address_components: place.addressComponents?.map((c: any) => ({
                             long_name: c.longText,
@@ -427,7 +431,8 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
                   fields: ['displayName', 'addressComponents']
               });
               if (place) {
-                  setDistrictName(place.displayName || '');
+                  const displayName = typeof place.displayName === 'string' ? place.displayName : place.displayName?.text || '';
+                  setDistrictName(displayName);
                   const stateComponent = place.addressComponents?.find((c: any) => c.types.includes('administrative_area_level_1'));
                   if (stateComponent) setDistrictState(stateComponent.longText || '');
                   return;
@@ -543,7 +548,17 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
                                 placeholder="Search for your School or School District..."
                                 onSelect={handleSearchSelect}
                                 autoFocus={true}
+                                onFallback={() => setUseFallback(true)}
                             />
+
+                            <div className="mt-4 flex justify-center">
+                                <button
+                                    onClick={() => setUseFallback(true)}
+                                    className="text-xs text-indigo-400 hover:text-indigo-600 underline underline-offset-4 transition-colors font-medium"
+                                >
+                                    Can't find your district? Enter manually
+                                </button>
+                            </div>
 
                             {placeDetails && !isLoadingDetails && (
                                 <div className="mt-4 p-4 bg-indigo-50 border border-indigo-100 rounded-xl animate-in fade-in zoom-in-95">
