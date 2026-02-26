@@ -1,33 +1,29 @@
 
 import React, { useState } from 'react';
-import { Lock, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
+import { ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
 import Logo from './Logo';
+import { signInWithPopup } from 'firebase/auth';
+import { auth, googleProvider } from '../firebase';
 
 interface LoginProps {
   onLogin: () => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
-  const [accessCode, setAccessCode] = useState('');
   const [error, setError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleGoogleLogin = async () => {
     setIsSubmitting(true);
     setError(false);
-
-    // Simple authentication logic
-    // In a real app, this would be an API call
-    setTimeout(() => {
-      const expectedCode = import.meta.env.VITE_ACCESS_CODE;
-      if (expectedCode && accessCode === expectedCode) {
-        onLogin();
-      } else {
-        setError(true);
-        setIsSubmitting(false);
-      }
-    }, 800);
+    try {
+      await signInWithPopup(auth, googleProvider);
+      onLogin();
+    } catch (e) {
+      console.error('Login failed', e);
+      setError(true);
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -48,53 +44,34 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </div>
 
           <div className="p-8">
-            <form onSubmit={handleSubmit} className="space-y-6">
-              <div>
-                <label htmlFor="access-code" className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">
-                  Access Code
-                </label>
-                <div className={`relative flex items-center border-2 rounded-xl transition-all ${error ? 'border-red-300 bg-red-50' : 'border-slate-200 focus-within:border-indigo-500'}`}>
-                  <div className="pl-4 text-slate-400">
-                    <Lock className="w-5 h-5" />
-                  </div>
-                  <input
-                    id="access-code"
-                    type="password"
-                    value={accessCode}
-                    onChange={(e) => setAccessCode(e.target.value)}
-                    placeholder="Enter simulation code"
-                    className="w-full py-4 px-4 bg-transparent outline-none text-slate-700 font-medium placeholder:text-slate-300"
-                    autoFocus
-                  />
+            <div className="space-y-6">
+              {error && (
+                <div className="mb-3 flex items-center justify-center gap-2 text-red-600 text-sm animate-in fade-in slide-in-from-top-1">
+                  <AlertCircle className="w-4 h-4" />
+                  <span>Failed to sign in. Please try again.</span>
                 </div>
-                {error && (
-                  <div className="mt-3 flex items-center gap-2 text-red-600 text-sm animate-in fade-in slide-in-from-top-1">
-                    <AlertCircle className="w-4 h-4" />
-                    <span>Invalid access code. Please try again.</span>
-                  </div>
-                )}
-              </div>
+              )}
 
               <button
-                type="submit"
-                disabled={!accessCode || isSubmitting}
+                onClick={handleGoogleLogin}
+                disabled={isSubmitting}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl shadow-lg shadow-indigo-100 transition-all flex items-center justify-center gap-2 group"
               >
                 {isSubmitting ? (
                   <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                 ) : (
                   <>
-                    Secure Login <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                    Sign in with Google <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </>
                 )}
               </button>
-            </form>
+            </div>
           </div>
 
           <div className="p-6 bg-slate-50 text-center border-t border-slate-100">
             <div className="flex items-center justify-center gap-2 text-slate-400 text-xs font-medium">
               <ShieldCheck className="w-4 h-4" />
-              <span>Restricted Access: Education Associates Internal Only</span>
+              <span>Restricted Access: Valid Google Account Required</span>
             </div>
           </div>
         </div>
