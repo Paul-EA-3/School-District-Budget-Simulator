@@ -22,13 +22,19 @@
 
     <!-- Google Maps API (Conditional Load) -->
     <script>
-      (function() {
+      // Define initSearch globally to prevent ReferenceError if called by Google Maps callback
+      window.initSearch = function() {
+        console.log("Google Maps API search initialized.");
+        window.googleMapsLoaded = true;
+      };
+
+      document.addEventListener('DOMContentLoaded', function() {
         const key = '%VITE_GOOGLE_MAPS_API_KEY%';
         // Only load if key is provided and not a dummy/placeholder value
         if (key && key !== 'dummy' && key !== 'your_google_maps_api_key_here' && !key.startsWith('%')) {
           const script = document.createElement('script');
-          // Specified v=weekly for new Places API access and removed loading=async for script tag compatibility
-          script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&v=weekly`;
+          // Specified v=weekly for new Places API access and added callback=initSearch for compatibility
+          script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&v=weekly&callback=initSearch`;
           script.async = true;
           script.defer = true;
           script.onerror = () => {
@@ -40,7 +46,7 @@
           console.warn('Google Maps API key is missing or invalid. Falling back to manual entry.');
           window.googleMapsError = 'missing_key';
         }
-      })();
+      });
     </script>
 
     <style>

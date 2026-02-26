@@ -9,6 +9,7 @@ declare global {
   interface Window {
     google: any;
     googleMapsError?: string;
+    googleMapsLoaded?: boolean;
   }
 }
 declare var google: any;
@@ -57,7 +58,7 @@ const CustomPlacesAutocomplete: React.FC<AutocompleteProps> = ({ placeholder, on
           return;
       }
 
-      if (window.google && window.google.maps) {
+      if (window.googleMapsLoaded || (window.google && window.google.maps)) {
         try {
             // Attempt to use modern Dynamic Library Loading
             if (typeof window.google.maps.importLibrary === 'function') {
@@ -284,7 +285,7 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
           return;
       }
 
-      if (window.google && window.google.maps) {
+      if (window.googleMapsLoaded || (window.google && window.google.maps)) {
         try {
             if (typeof window.google.maps.importLibrary === 'function') {
                 await window.google.maps.importLibrary("places");
