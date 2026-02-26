@@ -36,15 +36,9 @@
           // Specified v=weekly for new Places API access and added callback=initSearch for compatibility
           script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&v=weekly&callback=initSearch`;
           script.async = true;
-          script.defer = true;
-          script.onerror = () => {
-            console.error('Google Maps API failed to load.');
-            window.googleMapsError = 'load_error';
-          };
           document.head.appendChild(script);
         } else {
           console.warn('Google Maps API key is missing or invalid. Falling back to manual entry.');
-          window.googleMapsError = 'missing_key';
         }
       });
     </script>
