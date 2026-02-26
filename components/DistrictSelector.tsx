@@ -8,6 +8,8 @@ import genAI, { FAST_MODEL, generateAIContent } from '../services/gemini';
 declare global {
   interface Window {
     google: any;
+    googleMapsError?: string;
+    googleMapsLoaded?: boolean;
   }
 }
 declare var google: any;
@@ -48,10 +50,37 @@ const CustomPlacesAutocomplete: React.FC<AutocompleteProps> = ({ placeholder, on
     const timeout = 3000;
     let timeoutId: ReturnType<typeof setTimeout>;
 
-    const waitForGoogle = () => {
-      if (window.google && window.google.maps && window.google.maps.places) {
-        autocompleteService.current = new window.google.maps.places.AutocompleteService();
-        setMapsReady(true);
+    const waitForGoogle = async () => {
+      if (window.googleMapsError) {
+          setApiError("Google Maps failed to load. Using manual entry.");
+          return;
+      }
+
+      if (window.googleMapsLoaded || (window.google && window.google.maps)) {
+        try {
+            // Attempt to use modern Dynamic Library Loading
+            if (typeof window.google.maps.importLibrary === 'function') {
+                await window.google.maps.importLibrary("places");
+            }
+
+            if (window.google.maps.places) {
+                // Initialize session token for new API compatibility
+                if (window.google.maps.places.AutocompleteSessionToken) {
+                    sessionToken.current = new window.google.maps.places.AutocompleteSessionToken();
+                }
+
+                // Keep reference to legacy service as fallback
+                autocompleteService.current = new window.google.maps.places.AutocompleteService();
+                setMapsReady(true);
+                return;
+            }
+        } catch (e) {
+            console.error("Error initializing Google Places:", e);
+        }
+      }
+
+      if (Date.now() - startTime < timeout) {
+        timeoutId = setTimeout(waitForGoogle, 200);
       } else {
         if (Date.now() - startTime < timeout) {
           timeoutId = setTimeout(waitForGoogle, 200);
@@ -202,8 +231,25 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
         if (Date.now() - startTime > timeout) {
           console.warn("Google Maps API failed to load within timeout. Using fallback mode.");
           setUseFallback(true);
-        } else {
-          timeoutId = setTimeout(initService, 200);
+          return;
+      }
+
+      if (window.googleMapsLoaded || (window.google && window.google.maps)) {
+        try {
+            if (typeof window.google.maps.importLibrary === 'function') {
+                await window.google.maps.importLibrary("places");
+            }
+
+            if (window.google.maps.places) {
+                // Create a virtual map div as required by the legacy PlacesService fallback
+                const mapDiv = document.createElement('div');
+                placesService.current = new window.google.maps.places.PlacesService(mapDiv);
+                setMapsServiceReady(true);
+                setUseFallback(false);
+                return;
+            }
+        } catch (e) {
+            console.error("Error initializing Places Service:", e);
         }
       }
     };

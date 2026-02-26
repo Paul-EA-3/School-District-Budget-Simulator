@@ -38,6 +38,8 @@ export const find_state_api = async (state_abbreviation: string): Promise<StateA
       
       If a direct API is unavailable, find the public URL for the raw data file (CSV, JSON, XML) hosted on the state's official website or the most relevant structured federal API (e.g., NCES, Census). Use {DISTRICT_ID} as a placeholder for the URL's query parameter where applicable.
       
+      IMPORTANT: All URLs must use the HTTPS protocol.
+
       RETURN JSON ONLY with the following properties:
       - state_abbreviation (string): The two-letter abbreviation of the state.
       - finance_api_url (string): The most relevant public API/raw data URL for PPE or finance data.
