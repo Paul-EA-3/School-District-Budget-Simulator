@@ -3,9 +3,9 @@ import { getAuth, GoogleAuthProvider } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: "sd-budget-simulator-73816746.firebaseapp.com",
-  projectId: "sd-budget-simulator-73816746",
-  storageBucket: "sd-budget-simulator-73816746.appspot.com",
+  authDomain: "sd-budget-simulator-7381-2a4c8.firebaseapp.com",
+  projectId: "sd-budget-simulator-7381-2a4c8",
+  storageBucket: "sd-budget-simulator-7381-2a4c8.firebasestorage.app",
   messagingSenderId: "695745414882",
   appId: "1:695745414882:web:36b90857c53a9fb21f00bb"
 };
