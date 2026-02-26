@@ -27,11 +27,18 @@
         // Only load if key is provided and not a dummy/placeholder value
         if (key && key !== 'dummy' && key !== 'your_google_maps_api_key_here' && !key.startsWith('%')) {
           const script = document.createElement('script');
-          script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&loading=async`;
+          // Specified v=weekly for new Places API access and removed loading=async for script tag compatibility
+          script.src = `https://maps.googleapis.com/maps/api/js?key=${key}&libraries=places&v=weekly`;
           script.async = true;
+          script.defer = true;
+          script.onerror = () => {
+            console.error('Google Maps API failed to load.');
+            window.googleMapsError = 'load_error';
+          };
           document.head.appendChild(script);
         } else {
           console.warn('Google Maps API key is missing or invalid. Falling back to manual entry.');
+          window.googleMapsError = 'missing_key';
         }
       })();
     </script>
