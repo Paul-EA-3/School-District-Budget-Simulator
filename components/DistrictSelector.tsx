@@ -8,7 +8,6 @@ import genAI, { FAST_MODEL, generateAIContent } from '../services/gemini';
 declare global {
   interface Window {
     google: any;
-    googleMapsError?: string;
   }
 }
 declare var google: any;
@@ -39,134 +38,55 @@ const CustomPlacesAutocomplete: React.FC<AutocompleteProps> = ({ placeholder, on
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [mapsReady, setMapsReady] = useState(false);
-  const [apiError, setApiError] = useState<string | null>(null);
   
   const autocompleteService = useRef<any>(null);
-  const sessionToken = useRef<any>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Wait for Google API to load & Initialize Services
+  // Wait for Google API to load
   useEffect(() => {
     const startTime = Date.now();
-    const timeout = 5000; // Increased to 5s
+    const timeout = 3000;
     let timeoutId: ReturnType<typeof setTimeout>;
 
-    const waitForGoogle = async () => {
-      if (window.googleMapsError) {
-          setApiError("Google Maps failed to load. Using manual entry.");
-          return;
-      }
-
-      if (window.google && window.google.maps) {
-        try {
-            // Attempt to use modern Dynamic Library Loading
-            if (typeof window.google.maps.importLibrary === 'function') {
-                await window.google.maps.importLibrary("places");
-            }
-
-            if (window.google.maps.places) {
-                // Initialize session token for new API compatibility
-                if (window.google.maps.places.AutocompleteSessionToken) {
-                    sessionToken.current = new window.google.maps.places.AutocompleteSessionToken();
-                }
-
-                // Keep reference to legacy service as fallback
-                autocompleteService.current = new window.google.maps.places.AutocompleteService();
-                setMapsReady(true);
-                return;
-            }
-        } catch (e) {
-            console.error("Error initializing Google Places:", e);
+    const waitForGoogle = () => {
+      if (window.google && window.google.maps && window.google.maps.places) {
+        autocompleteService.current = new window.google.maps.places.AutocompleteService();
+        setMapsReady(true);
+      } else {
+        if (Date.now() - startTime < timeout) {
+          timeoutId = setTimeout(waitForGoogle, 200);
         }
       }
-
-      if (Date.now() - startTime < timeout) {
-        timeoutId = setTimeout(waitForGoogle, 200);
-      } else {
-        setApiError("Initialization timeout. Please check your connection or API key.");
-      }
     };
-
     waitForGoogle();
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
     };
   }, []);
 
-  const handleInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
     setInputValue(value);
-    setApiError(null);
     
-    if (!value.trim() || !window.google?.maps?.places) {
+    if (!value.trim() || !autocompleteService.current) {
       setPredictions([]);
       setIsOpen(false);
       return;
     }
 
-    const request: any = {
+    autocompleteService.current.getPlacePredictions({
       input: value,
       componentRestrictions: { country: 'us' }
-    };
-
-    if (sessionToken.current) request.sessionToken = sessionToken.current;
-
-    try {
-        // --- MODE 1: Attempt New Places API (v2) if available via AutocompleteSuggestion ---
-        // Note: In v3.59+, fetchAutocompleteSuggestions is preferred for new customers
-        if (window.google.maps.places.AutocompleteSuggestion) {
-            try {
-                // Map legacy request to new AutocompleteRequest structure
-                const newRequest: any = {
-                    input: value,
-                    region: 'us',
-                    sessionToken: sessionToken.current
-                };
-
-                const { suggestions } = await (window.google.maps.places.AutocompleteSuggestion as any).fetchAutocompleteSuggestions(newRequest);
-                if (suggestions && suggestions.length > 0) {
-                    // Harmonize new PlacePrediction to legacy AutocompletePrediction structure for UI
-                    const harmonized = suggestions.map((s: any) => ({
-                        place_id: s.placePrediction.placeId,
-                        description: s.placePrediction.text.text,
-                        structured_formatting: {
-                            main_text: s.placePrediction.structuredFormat.mainText.text,
-                            secondary_text: s.placePrediction.structuredFormat.secondaryText?.text || ''
-                        }
-                    }));
-                    setPredictions(harmonized);
-                    setIsOpen(true);
-                    setActiveIndex(-1);
-                    return;
-                }
-            } catch (err: any) {
-                console.warn("New Autocomplete API failed, falling back to legacy:", err);
-            }
-        }
-
-        // --- MODE 2: Legacy AutocompleteService Fallback ---
-        if (autocompleteService.current) {
-            autocompleteService.current.getPlacePredictions(request, (results: any, status: any) => {
-                if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
-                    setPredictions(results);
-                    setIsOpen(true);
-                    setActiveIndex(-1);
-                } else if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-                    setPredictions([]);
-                    setIsOpen(false);
-                } else {
-                    console.error("Autocomplete Error Status:", status);
-                    if (status === 'REQUEST_DENIED') {
-                        setApiError("API access denied. Please verify your Google Cloud configuration.");
-                    }
-                    setPredictions([]);
-                    setIsOpen(false);
-                }
-            });
-        }
-    } catch (err) {
-        console.error("Autocomplete implementation error:", err);
-    }
+    }, (results: any, status: any) => {
+      if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+        setPredictions(results);
+        setIsOpen(true);
+        setActiveIndex(-1);
+      } else {
+        setPredictions([]);
+        setIsOpen(false);
+      }
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -214,13 +134,6 @@ const CustomPlacesAutocomplete: React.FC<AutocompleteProps> = ({ placeholder, on
             {isDisabled ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
         </div>
       </div>
-
-      {apiError && (
-        <div className="absolute z-50 w-full bg-red-50 mt-2 p-3 rounded-lg border border-red-100 text-red-600 text-xs flex items-center gap-2 animate-in fade-in slide-in-from-top-1">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            {apiError}
-        </div>
-      )}
 
       {isOpen && predictions.length > 0 && (
         <ul className="absolute z-50 w-full bg-white mt-2 rounded-lg shadow-xl border border-slate-100 max-h-[300px] overflow-y-auto animate-in fade-in slide-in-from-top-2 duration-200">
@@ -275,39 +188,23 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
   // Initialize Places Service Robustly with Timeout Fallback
   useEffect(() => {
     const startTime = Date.now();
-    const timeout = 5000; // 5 seconds timeout
+    const timeout = 3000; // 3 seconds timeout
     let timeoutId: ReturnType<typeof setTimeout>;
 
-    const initService = async () => {
-      if (window.googleMapsError) {
-          setUseFallback(true);
-          return;
-      }
-
-      if (window.google && window.google.maps) {
-        try {
-            if (typeof window.google.maps.importLibrary === 'function') {
-                await window.google.maps.importLibrary("places");
-            }
-
-            if (window.google.maps.places) {
-                // Create a virtual map div as required by the legacy PlacesService fallback
-                const mapDiv = document.createElement('div');
-                placesService.current = new window.google.maps.places.PlacesService(mapDiv);
-                setMapsServiceReady(true);
-                setUseFallback(false);
-                return;
-            }
-        } catch (e) {
-            console.error("Error initializing Places Service:", e);
-        }
-      }
-
-      if (Date.now() - startTime > timeout) {
-        console.warn("Google Maps API failed to load within timeout. Using fallback mode.");
-        setUseFallback(true);
+    const initService = () => {
+      if (window.google && window.google.maps && window.google.maps.places) {
+        // Create a virtual map div as required by the PlacesService
+        const mapDiv = document.createElement('div'); 
+        placesService.current = new window.google.maps.places.PlacesService(mapDiv);
+        setMapsServiceReady(true);
+        setUseFallback(false);
       } else {
-        timeoutId = setTimeout(initService, 200);
+        if (Date.now() - startTime > timeout) {
+          console.warn("Google Maps API failed to load within timeout. Using fallback mode.");
+          setUseFallback(true);
+        } else {
+          timeoutId = setTimeout(initService, 200);
+        }
       }
     };
     initService();
@@ -319,81 +216,45 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
   // -------------------------------------------------------------------------
   // LOGIC: Fetch Details & AI Identity
   // -------------------------------------------------------------------------
-  const handleSearchSelect = async (placeId: string, description: string) => {
+  const handleSearchSelect = (placeId: string, description: string) => {
     setIsLoadingDetails(true);
     setError(null);
 
-    const request: any = {
+    // Wait loop if service is somehow strictly null but map loaded
+    if (!placesService.current) {
+        // If not ready, try one emergency init or fail gracefully
+        if (window.google && window.google.maps) {
+             const mapDiv = document.createElement('div');
+             placesService.current = new window.google.maps.places.PlacesService(mapDiv);
+        } else {
+             setError("Google Maps API not fully loaded. Please refresh.");
+             setIsLoadingDetails(false);
+             return;
+        }
+    }
+
+    const request = {
       placeId: placeId,
       fields: ['name', 'formatted_address', 'address_components', 'geometry']
     };
 
-    try {
-        // --- MODE 1: Attempt New Place.fetchFields (v2) ---
-        if (window.google?.maps?.places?.Place) {
-            try {
-                const { place } = await window.google.maps.places.Place.fetchFields({
-                    id: placeId,
-                    fields: ['displayName', 'formattedAddress', 'addressComponents', 'location']
-                });
-
-                if (place) {
-                    // Harmonize new Place to legacy PlaceResult structure for remaining logic
-                    const harmonizedPlace = {
-                        name: place.displayName,
-                        formatted_address: place.formattedAddress,
-                        address_components: place.addressComponents?.map((c: any) => ({
-                            long_name: c.longText,
-                            short_name: c.shortText,
-                            types: c.types
-                        })),
-                        geometry: {
-                            location: place.location
-                        }
-                    };
-
-                    setPlaceDetails(harmonizedPlace);
-                    const stateComponent = harmonizedPlace.address_components?.find((c: any) => c.types.includes('administrative_area_level_1'));
-                    setDistrictState(stateComponent ? stateComponent.long_name : '');
-                    setDistrictName(harmonizedPlace.name || '');
-                    identifyDistrictWithAI(harmonizedPlace.name || '', harmonizedPlace.formatted_address || '');
-                    setIsLoadingDetails(false);
-                    return;
-                }
-            } catch (err: any) {
-                console.warn("New Place Details API failed, falling back to legacy:", err);
-            }
-        }
-
-        // --- MODE 2: Legacy PlacesService Fallback ---
-        if (!placesService.current && window.google?.maps?.places) {
-             const mapDiv = document.createElement('div');
-             placesService.current = new window.google.maps.places.PlacesService(mapDiv);
-        }
-
-        if (placesService.current) {
-            placesService.current.getDetails(request, (place: any, status: any) => {
-                if (status === window.google.maps.places.PlacesServiceStatus.OK && place) {
-                    setPlaceDetails(place);
-                    const stateComponent = place.address_components?.find((c: any) => c.types.includes('administrative_area_level_1'));
-                    setDistrictState(stateComponent ? stateComponent.long_name : '');
-                    setDistrictName(place.name || '');
-                    identifyDistrictWithAI(place.name || '', place.formatted_address || '');
-                } else {
-                    console.error("Places API Details Error:", status);
-                    setError(`Failed to retrieve details (${status}). Please try again.`);
-                }
-                setIsLoadingDetails(false);
-            });
-        } else {
-            setError("Google Maps API not initialized.");
-            setIsLoadingDetails(false);
-        }
-    } catch (err) {
-        console.error("Details fetch implementation error:", err);
-        setError("An unexpected error occurred while fetching details.");
-        setIsLoadingDetails(false);
-    }
+    placesService.current?.getDetails(request, (place: any, status: any) => {
+      if (status === google.maps.places.PlacesServiceStatus.OK && place) {
+        setPlaceDetails(place);
+        
+        // Basic State Extraction
+        const stateComponent = place.address_components?.find((c: any) => c.types.includes('administrative_area_level_1'));
+        setDistrictState(stateComponent ? stateComponent.long_name : '');
+        setDistrictName(place.name || ''); // Default to place name
+        
+        // Start AI Analysis
+        identifyDistrictWithAI(place.name || '', place.formatted_address || '');
+      } else {
+        console.error("Places API Error:", status);
+        setError("Failed to retrieve details. Please select a valid location.");
+      }
+      setIsLoadingDetails(false);
+    });
   };
 
   const identifyDistrictWithAI = async (name: string, address: string) => {
@@ -418,32 +279,16 @@ const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onSelect }) => {
     }
   };
 
-  const handleDistrictSelect = async (placeId: string, description: string) => {
-      // Re-use the robust handleSearchSelect logic or simple version for the editor
-      if (window.google?.maps?.places?.Place) {
-          try {
-              const { place } = await window.google.maps.places.Place.fetchFields({
-                  id: placeId,
-                  fields: ['displayName', 'addressComponents']
-              });
-              if (place) {
-                  setDistrictName(place.displayName || '');
-                  const stateComponent = place.addressComponents?.find((c: any) => c.types.includes('administrative_area_level_1'));
-                  if (stateComponent) setDistrictState(stateComponent.longText || '');
-                  return;
-              }
-          } catch (e) { console.warn("Fallback to legacy in district select"); }
-      }
-
-      if (placesService.current) {
-          placesService.current.getDetails({ placeId, fields: ['name', 'address_components'] }, (place: any, status: any) => {
-              if (place && status === window.google.maps.places.PlacesServiceStatus.OK) {
-                  setDistrictName(place.name || '');
-                  const stateComponent = place.address_components?.find((c: any) => c.types.includes('administrative_area_level_1'));
-                  if (stateComponent) setDistrictState(stateComponent.long_name);
-              }
-          });
-      }
+  const handleDistrictSelect = (placeId: string, description: string) => {
+      if (!placesService.current) return;
+      
+      placesService.current.getDetails({ placeId, fields: ['name', 'address_components'] }, (place: any, status: any) => {
+          if (place && status === google.maps.places.PlacesServiceStatus.OK) {
+              setDistrictName(place.name || '');
+              const stateComponent = place.address_components?.find((c: any) => c.types.includes('administrative_area_level_1'));
+              if (stateComponent) setDistrictState(stateComponent.long_name);
+          }
+      });
   };
 
   const handleConfirm = () => {
