@@ -19,9 +19,17 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     try {
       await signInWithPopup(auth, googleProvider);
       onLogin();
-    } catch (e) {
+    } catch (e: any) {
       console.error('Login failed', e);
-      setError(true);
+      let errorMsg = 'Failed to sign in. Please try again.';
+      if (e.code === 'auth/unauthorized-domain') {
+        errorMsg = 'Wait! The custom domain you deployed to is not authorized in Firebase! You must go to your Firebase Console -> Authentication -> Settings -> Authorized Domains and add "school-district-budget-simulator.education.associates" to the list.';
+      } else if (e.code === 'auth/operation-not-allowed') {
+        errorMsg = 'Google Sign-In is not enabled. Go to Firebase Console -> Authentication -> Sign-in method and enable Google.';
+      } else if (e.message) {
+        errorMsg = `Error: ${e.message}`;
+      }
+      setError(errorMsg as any);
       setIsSubmitting(false);
     }
   };
@@ -46,9 +54,9 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <div className="p-8">
             <div className="space-y-6">
               {error && (
-                <div className="mb-3 flex items-center justify-center gap-2 text-red-600 text-sm animate-in fade-in slide-in-from-top-1">
-                  <AlertCircle className="w-4 h-4" />
-                  <span>Failed to sign in. Please try again.</span>
+                <div className="mb-3 flex p-4 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm animate-in fade-in slide-in-from-top-1 text-left items-start gap-3">
+                  <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                  <span>{error}</span>
                 </div>
               )}
 
