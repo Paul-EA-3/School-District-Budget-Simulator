@@ -1,12 +1,11 @@
 import React from 'react';
 
 export const Logo: React.FC<{ className?: string }> = ({ className = "h-10" }) => (
-  <img
-    src="https://educationassociates.com/wp-content/uploads/2022/10/EA-Full-Logo.svg"
-    alt="Education Associates Logo"
-    className={className}
-    style={{ objectFit: 'contain' }}
-  />
+  <div className={`flex items-center ${className}`}>
+    <span className="text-indigo-900 font-bold italic text-2xl tracking-tight font-sans">
+      Education Associates
+    </span>
+  </div>
 );
 
 export default Logo;

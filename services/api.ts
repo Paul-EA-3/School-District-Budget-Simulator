@@ -1,6 +1,5 @@
 
-import { FAST_MODEL, PRO_MODEL, safeJsonParse, safetySettings, generateAIContent } from "./gemini";
-import genAI from "./gemini";
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 
 export interface FinancialState {
   revenue: number;
@@ -32,68 +31,45 @@ export interface StateApiDiscovery {
  */
 export const find_state_api = async (state_abbreviation: string): Promise<StateApiDiscovery | null> => {
   try {
-    const response = await generateAIContent(PRO_MODEL, `For the state with the abbreviation ${state_abbreviation}, find the most direct public URL for:
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    const prompt = `
+      For the state with the abbreviation ${state_abbreviation}, find the most direct public URL for:
       1. District-Level Per-Pupil Expenditure (PPE) Data.
       2. District-Level Academic Assessment Proficiency Rates (e.g., state test scores).
       
       If a direct API is unavailable, find the public URL for the raw data file (CSV, JSON, XML) hosted on the state's official website or the most relevant structured federal API (e.g., NCES, Census). Use {DISTRICT_ID} as a placeholder for the URL's query parameter where applicable.
       
-      IMPORTANT: All URLs must use the HTTPS protocol.
-
       RETURN JSON ONLY with the following properties:
       - state_abbreviation (string): The two-letter abbreviation of the state.
       - finance_api_url (string): The most relevant public API/raw data URL for PPE or finance data.
       - assessment_api_url (string): The most relevant public API/raw data URL for test/proficiency data.
       - source_authority (string): The name of the agency or portal that hosts the data.
-    `, {
-        tools: [{ googleSearch: {} }] as any,
-        safetySettings
+    `;
+    
+    const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-preview',
+        config: { 
+            tools: [{ googleSearch: {} }],
+            thinkingConfig: { thinkingBudget: 32768 },
+            safetySettings: [
+                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+            ]
+        },
+        contents: prompt
     });
 
     const text = response.text;
     if (!text) return null;
     
-    return safeJsonParse(text) as StateApiDiscovery;
+    const clean = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+    return JSON.parse(clean) as StateApiDiscovery;
   } catch (e) {
     console.warn("API Discovery Failed", e);
     return null;
   }
-};
-
-/**
- * Helper: Fetch District Data from discovered APIs.
- */
-export const fetch_district_data = async (district_id: string, api_urls: StateApiDiscovery) => {
-    try {
-        const financeUrl = api_urls.finance_api_url.replace('{DISTRICT_ID}', district_id);
-        const assessmentUrl = api_urls.assessment_api_url.replace('{DISTRICT_ID}', district_id);
-
-        const [financeRes, assessmentRes] = await Promise.all([
-            fetch(financeUrl).catch(e => ({ ok: false, statusText: e.message })),
-            fetch(assessmentUrl).catch(e => ({ ok: false, statusText: e.message }))
-        ]);
-
-        let financeData = null;
-        let assessmentData = null;
-
-        if ((financeRes as Response).ok) {
-            financeData = await (financeRes as Response).json();
-        } else {
-            console.warn(`Finance API Failed: ${(financeRes as any).statusText}`);
-        }
-
-        if ((assessmentRes as Response).ok) {
-            assessmentData = await (assessmentRes as Response).json();
-        } else {
-            console.warn(`Assessment API Failed: ${(assessmentRes as any).statusText}`);
-        }
-
-        return { financeData, assessmentData };
-
-    } catch (e) {
-        console.error("fetch_district_data Critical Error:", e);
-        return null;
-    }
 };
 
 /**
@@ -102,7 +78,11 @@ export const fetch_district_data = async (district_id: string, api_urls: StateAp
  */
 export const fetchStateLevelData = async (state: string, districtName: string): Promise<StateFiscalData | null> => {
     try {
-        const response = await generateAIContent(PRO_MODEL, `ACT AS A DATA SCRAPER.
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        
+        // Construct a targeted search query for official state data
+        const prompt = `
+          ACT AS A DATA SCRAPER. 
           Task: Find official State Department of Education data for: "${districtName}" in ${state}.
           
           MANDATE: Perform a Google Search for these exact terms:
@@ -124,16 +104,28 @@ export const fetchStateLevelData = async (state: string, districtName: string): 
             "enrollment": number,
             "source": "String (e.g. 'Maryland State Dept of Education Report Card')"
           }
-        `, {
-            tools: [{ googleSearch: {} }] as any,
-            responseMimeType: "application/json",
-            safetySettings
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-pro-preview',
+            config: { 
+                tools: [{ googleSearch: {} }],
+                thinkingConfig: { thinkingBudget: 32768 },
+                responseMimeType: 'application/json',
+                safetySettings: [
+                    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE }
+                ]
+            },
+            contents: prompt
         });
 
         const text = response.text;
         if (!text) return null;
 
-        const data = safeJsonParse(text);
+        const cleanJson = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+        const data = JSON.parse(cleanJson);
 
         // Basic Validation
         if (!data.ppe || !data.proficiency) return null;
